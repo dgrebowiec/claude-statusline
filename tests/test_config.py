@@ -31,13 +31,13 @@ def test_load_missing_file_gives_defaults(tmp_path):
 
 def test_configurator_toggle_move_level_and_save(tmp_path):
     path = tmp_path / "c.json"
-    answers = iter(["1", "d1", "l", "w"])  # hide model, move enabled field 1 down, level, save
+    answers = iter(["1", "d1", "l", "w"])  # hide model, move it down, level, save
     out = []
     saved = run(path, ask=lambda prompt: next(answers), out=out.append)
     assert saved == path
     cfg = config_module.load(path)
     assert "model" not in cfg.fields
-    assert cfg.fields[0] == "context"  # effort was first; moving it down puts context first
+    assert cfg.fields[0] == "effort"  # model (hidden) moved below effort
     assert cfg.level == "detailed"
 
 
@@ -116,13 +116,24 @@ def test_decode_key_arrows_and_specials():
     assert decode_key("\x1b[99~") == ""
 
 
-def test_editor_cursor_toggle_and_follow():
+def test_editor_toggle_keeps_row_and_cursor_in_place():
     editor = Editor(Config())
+    order_before = list(editor.order)
     _press(editor, "down", "space")  # hide "effort"
     assert "effort" not in editor.config.fields
-    assert editor.cursor == len(editor.config.fields)  # cursor follows it to the hidden part
-    _press(editor, "space")  # show it again: appended at the end of the enabled fields
-    assert editor.config.fields[-1] == "effort"
+    assert editor.order == order_before and editor.cursor == 1
+    _press(editor, "space")  # show it again: back in the same place
+    assert editor.config.fields == Config().fields
+    assert editor.order == order_before and editor.cursor == 1
+
+
+def test_editor_can_move_a_hidden_field_and_it_keeps_its_place():
+    editor = Editor(Config())
+    _press(editor, "space")  # hide "model" (row 1)
+    _press(editor, "d", "d")  # move it below "context" while hidden
+    assert editor.order[:3] == ["effort", "context", "model"] and editor.cursor == 2
+    _press(editor, "space")  # turn it back on
+    assert editor.config.fields[:3] == ["effort", "context", "model"]
 
 
 def test_editor_move_and_level_with_arrows():

@@ -31,7 +31,7 @@ claude-statusline configure
 | --- | --- |
 | `↑` `↓` (or `k` `j`) | select a field |
 | `space` (or a digit `1`-`7`) | show / hide the field |
-| `u` `d` (or `Shift+↑` `Shift+↓`) | move the field up / down |
+| `u` `d` (or `Shift+↑` `Shift+↓`) | move the field up / down (hidden fields too; space never moves a row) |
 | `←` `→` | detail level: `minimal`, `normal`, `detailed` |
 | `s` / `S` | next separator preset / type your own |
 | `c` | colours on / off |

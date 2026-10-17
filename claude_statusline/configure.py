@@ -19,7 +19,7 @@ KEY_HELP = ("↑↓ select   space show/hide   u/d move   ←→ level   "
             "s separator   S custom separator   c colours   r reset   enter save   q quit")
 
 LINE_HELP = """commands:
-  <n>        show or hide field n          u<n> / d<n>  move enabled field n up / down
+  <n>        show or hide field n          u<n> / d<n>  move field n up / down
   l          cycle detail level            s            set separator
   c          colours on / off              r            reset to defaults
   w          save and exit                 q            quit without saving"""
@@ -40,6 +40,8 @@ class Editor:
 
     def __init__(self, config: Config):
         self.config = config
+        # Stable order of all fields: toggling only flips the checkbox, u/d is what moves.
+        self.order = display_order(config)
         self.cursor = 0
         self.dirty = False
         self.message = ""
@@ -51,39 +53,37 @@ class Editor:
         self.dirty = True
 
     def _at(self, index: Optional[int]) -> str:
-        return display_order(self.config)[self.cursor if index is None else index]
+        return self.order[self.cursor if index is None else index]
 
-    def _follow(self, name: str) -> None:
-        self.cursor = display_order(self.config).index(name)
+    def _sync(self, enabled: set) -> None:
+        """Enabled fields, in the editor's order, become the config's fields."""
+        self.config.fields = [name for name in self.order if name in enabled]
 
     def move_cursor(self, step: int) -> None:
         self.cursor = (self.cursor + step) % len(FIELDS)
 
     def toggle(self, index: Optional[int] = None) -> None:
         name = self._at(index)
-        fields = self.config.fields
-        if name in fields:
-            if len(fields) == 1:
+        enabled = set(self.config.fields)
+        if name in enabled:
+            if len(enabled) == 1:
                 self.message = "at least one field must stay on"
                 return
-            fields.remove(name)
+            enabled.remove(name)
         else:
-            fields.append(name)
-        self._follow(name)
+            enabled.add(name)
+        self._sync(enabled)
         self._changed()
 
     def move(self, step: int, index: Optional[int] = None) -> None:
         name = self._at(index)
-        fields = self.config.fields
-        if name not in fields:
-            self.message = "turn the field on first, then move it"
-            return
-        i = fields.index(name)
+        i = self.order.index(name)
         j = i + step
-        if 0 <= j < len(fields):
-            fields[i], fields[j] = fields[j], fields[i]
+        if 0 <= j < len(self.order):
+            self.order[i], self.order[j] = self.order[j], self.order[i]
+            self._sync(set(self.config.fields))
             self._changed()
-        self._follow(name)
+        self.cursor = self.order.index(name)
 
     def cycle_level(self, step: int = 1) -> None:
         self.config.level = LEVELS[(LEVELS.index(self.config.level) + step) % len(LEVELS)]
@@ -107,6 +107,7 @@ class Editor:
         defaults = Config()
         self.config.level, self.config.fields = defaults.level, defaults.fields
         self.config.separator, self.config.colors = defaults.separator, defaults.colors
+        self.order = display_order(self.config)
         self.cursor = 0
         self._changed()
 
@@ -161,8 +162,8 @@ class Editor:
             self.reset()
         elif command[:1] in ("u", "d") and command[1:].isdigit():
             index = int(command[1:]) - 1
-            if not 0 <= index < len(self.config.fields):
-                self.message = "only enabled fields can be moved"
+            if not 0 <= index < len(FIELDS):
+                self.message = f"no field {command[1:]}"
             else:
                 self.move(-1 if command[0] == "u" else 1, index)
         elif command.isdigit():
@@ -184,7 +185,7 @@ class Editor:
         if self.dirty:
             title += f"  {DIM}(unsaved changes){RESET}"
         lines = [title, "", f"{BOLD}Fields{RESET}  {DIM}space: show/hide   u/d: move{RESET}"]
-        for index, name in enumerate(display_order(cfg)):
+        for index, name in enumerate(self.order):
             mark = "x" if name in cfg.fields else " "
             row = f" {index + 1}. [{mark}] {name:<8} {FIELD_DESCRIPTIONS[name]}"
             row = row.ljust(min(width - 2, 60))
@@ -309,14 +310,15 @@ def run_tui(path: Optional[Path] = None) -> Optional[Path]:
 
 # --- line-based fallback ---
 
-def show(config: Config, out: Callable[[str], None]) -> None:
+def show(editor: Editor, out: Callable[[str], None]) -> None:
+    config = editor.config
     out("")
     out("preview:")
     out("  " + preview(config))
     out("")
     out(f"level: {config.level}   colours: {'on' if config.colors else 'off'}"
         f"   separator: {config.separator!r}")
-    for index, name in enumerate(display_order(config), start=1):
+    for index, name in enumerate(editor.order, start=1):
         mark = "x" if name in config.fields else " "
         out(f"  {index}. [{mark}] {name:<8} {FIELD_DESCRIPTIONS[name]}")
     out("")
@@ -337,16 +339,18 @@ def run(path: Optional[Path] = None, ask: Callable[[str], str] = input,
         out: Callable[[str], None] = print) -> Optional[Path]:
     """Line-based editor. Returns the path it saved to, or None when the user quit."""
     path = path or config_module.config_path()
-    config = copy.deepcopy(config_module.load(path))
+    editor = Editor(copy.deepcopy(config_module.load(path)))
     while True:
-        show(config, out)
+        show(editor, out)
         try:
             command = ask("> ").strip()
         except EOFError:
             command = "q"
-        result = apply(config, command, ask, out)
+        result = editor.handle_line(command, ask)
+        if editor.message:
+            out(editor.message)
         if result == "save":
-            saved = config_module.save(config, path)
+            saved = config_module.save(editor.config, path)
             out(f"saved to {saved}")
             return saved
         if result == "quit":
