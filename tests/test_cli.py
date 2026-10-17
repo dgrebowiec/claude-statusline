@@ -11,6 +11,12 @@ from claude_statusline.settings import install, uninstall
 NOW = datetime.datetime(2026, 10, 17, 12, 0, 0, tzinfo=datetime.timezone.utc).timestamp()
 
 
+@pytest.fixture(autouse=True)
+def plain_output(monkeypatch):
+    """Text assertions run without ANSI codes; colour is tested separately."""
+    monkeypatch.setenv("NO_COLOR", "1")
+
+
 def _payload(pct=42, **extra):
     data = {
         "model": {"display_name": "Opus"},
@@ -71,6 +77,15 @@ def test_render_cache_shows_absolute_expiry(tmp_path):
 def test_render_survives_missing_transcript(tmp_path):
     payload = _payload(transcript_path=str(tmp_path / "missing.jsonl"))
     assert _render(tmp_path, payload).endswith(" | cache: brak")
+
+
+def test_colours_follow_levels_and_no_color(tmp_path, monkeypatch):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    coloured = _render(tmp_path, _payload(pct=90))
+    assert "\033[1;36mOpus\033[0m" in coloured  # model: bold cyan
+    assert "\033[31m[" in coloured                  # 90% -> red bar
+    monkeypatch.setenv("NO_COLOR", "1")
+    assert "\033[" not in _render(tmp_path, _payload(pct=90))
 
 
 def test_stdin_garbage_does_not_crash(monkeypatch, capsys):

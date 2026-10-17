@@ -14,6 +14,10 @@ Haiku 5.5 | [##------------------] 12% (118k/1.0M) | cache 1h: 59m54s | 5h: 17% 
 
 It uses 0 tokens: it only reads local data and never calls the model.
 
+Colours: model bold cyan; context and limit percentages green below 70%, yellow below 85%,
+red above; cache tier blue for `1h`, magenta for `5m`; session share italic cyan; the rest dim.
+Set `NO_COLOR=1` to turn colours off.
+
 ## Install
 
 Requires Python 3.9+ and no other packages.
