@@ -55,6 +55,19 @@ def test_render_limits_with_reset(tmp_path):
     assert "7d: 18% (reset 83h20m)" in line
 
 
+def test_render_cache_shows_absolute_expiry(tmp_path):
+    touch = datetime.datetime.fromtimestamp(NOW - 60)
+    usage = {"cache_creation": {"ephemeral_1h_input_tokens": 500}}
+    record = {"timestamp": touch.astimezone(datetime.timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%S.000Z"), "message": {"id": "m1", "model": "claude-opus-5",
+                                                "usage": usage}}
+    transcript = tmp_path / "s.jsonl"
+    transcript.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    expected = datetime.datetime.fromtimestamp(NOW - 60 + 3600).strftime("%H:%M:%S")
+    line = _render(tmp_path, _payload(transcript_path=str(transcript)))
+    assert f"cache 1h: do {expected}" in line
+
+
 def test_render_survives_missing_transcript(tmp_path):
     payload = _payload(transcript_path=str(tmp_path / "missing.jsonl"))
     assert _render(tmp_path, payload).endswith(" | cache: brak")

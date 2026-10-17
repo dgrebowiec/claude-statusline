@@ -1,6 +1,7 @@
 """Builds the one-line status from the JSON Claude Code passes on stdin."""
 import os
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -54,14 +55,15 @@ def _context_part(payload: Dict[str, Any]) -> Optional[str]:
 
 
 def _cache_part(transcript: Optional[str], now: float) -> str:
-    status = cache_status(transcript, now) if transcript else None
+    """Absolute local expiry time: the statusline is not redrawn on a timer, so a countdown would freeze."""
+    status = cache_status(transcript) if transcript else None
     if status is None:
         return " | cache: brak"
-    tier, left = status
-    if left <= 0:
-        return f" | cache {tier}: wygasł"
-    minutes, seconds = divmod(int(left), 60)
-    return f" | cache {tier}: {minutes}m{seconds:02d}s"
+    tier, expires_at = status
+    clock = datetime.fromtimestamp(expires_at).strftime("%H:%M:%S")
+    if expires_at <= now:
+        return f" | cache {tier}: wygasł o {clock}"
+    return f" | cache {tier}: do {clock}"
 
 
 def _limit_parts(payload: Dict[str, Any], transcript: Optional[str], now: float,

@@ -6,8 +6,8 @@ from .transcript import tail_lines, usage_record
 TTL_SECONDS = {"5m": 300, "1h": 3600}
 
 
-def cache_status(transcript: str, now: float, lines: int = 400) -> Optional[Tuple[str, float]]:
-    """(tier, seconds left) for the last cache write, or None when no cache info is found.
+def cache_status(transcript: str, lines: int = 400) -> Optional[Tuple[str, float]]:
+    """(tier, expiry as a Unix timestamp) of the last cache write, or None when none is found.
 
     The tier is the one of the last write. Each read refreshes the entry for its own tier,
     so the expiry is the last cache touch plus that tier's TTL.
@@ -30,5 +30,4 @@ def cache_status(transcript: str, now: float, lines: int = 400) -> Optional[Tupl
             last_write = "1h" if write_1h else "5m"
     if last_touch is None or last_write is None:
         return None
-    expires_at = last_touch.timestamp() + TTL_SECONDS[last_write]
-    return last_write, expires_at - now
+    return last_write, last_touch.timestamp() + TTL_SECONDS[last_write]

@@ -65,9 +65,9 @@ def test_cache_tier_and_expiry(tmp_path):
     usage = {"cache_creation": {"ephemeral_5m_input_tokens": 0,
                                 "ephemeral_1h_input_tokens": 500}}
     path = _write(tmp_path / "s.jsonl", [_record(touch, "claude-opus-5", usage, "m1")])
-    tier, left = cache_status(path, NOW.timestamp())
+    tier, expires_at = cache_status(path)
     assert tier == "1h"
-    assert left == pytest.approx(3600 - 60)
+    assert expires_at == pytest.approx(touch.timestamp() + 3600)
 
 
 def test_cache_5m_expires(tmp_path):
@@ -75,13 +75,13 @@ def test_cache_5m_expires(tmp_path):
     usage = {"cache_creation": {"ephemeral_5m_input_tokens": 500,
                                 "ephemeral_1h_input_tokens": 0}}
     path = _write(tmp_path / "s.jsonl", [_record(touch, "claude-opus-5", usage, "m1")])
-    tier, left = cache_status(path, NOW.timestamp())
-    assert tier == "5m" and left < 0
+    tier, expires_at = cache_status(path)
+    assert tier == "5m" and expires_at < NOW.timestamp()
 
 
 def test_cache_none_without_writes(tmp_path):
     path = _write(tmp_path / "s.jsonl", [])
-    assert cache_status(path, NOW.timestamp()) is None
+    assert cache_status(path) is None
 
 
 # --- session share ---
