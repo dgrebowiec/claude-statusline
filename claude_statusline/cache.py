@@ -6,6 +6,23 @@ from .transcript import tail_lines, usage_record
 TTL_SECONDS = {"5m": 300, "1h": 3600}
 
 
+def last_cache_io(transcript: str, lines: int = 400) -> Optional[Tuple[int, int]]:
+    """(tokens read from the cache, tokens written to it) by the last API call, or None."""
+    for line in reversed(tail_lines(transcript, lines)):
+        rec = usage_record(line)
+        if rec is None:
+            continue
+        usage = rec["usage"]
+        read = usage.get("cache_read_input_tokens") or 0
+        write = usage.get("cache_creation_input_tokens")
+        if write is None:
+            tiers = usage.get("cache_creation") or {}
+            write = ((tiers.get("ephemeral_5m_input_tokens") or 0)
+                     + (tiers.get("ephemeral_1h_input_tokens") or 0))
+        return read, write
+    return None
+
+
 def cache_status(transcript: str, lines: int = 400) -> Optional[Tuple[str, float]]:
     """(tier, expiry as a Unix timestamp) of the last cache write, or None when none is found.
 

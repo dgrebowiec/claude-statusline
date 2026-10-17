@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from claude_statusline.cache import cache_status
+from claude_statusline.cache import cache_status, last_cache_io
 from claude_statusline.pricing import weighted
 from claude_statusline.transcript import tail_lines, usage_record
 from claude_statusline.usage import session_share
@@ -106,3 +106,22 @@ def test_session_share_none_when_window_empty(tmp_path):
     _write(main, [])
     assert session_share(str(main), 5, 10.0, str(tmp_path / "none"),
                          tmp_path / "cache", NOW.timestamp()) is None
+
+
+# --- cache reads and writes of the last call ---
+
+def test_last_cache_io_reads_the_last_call(tmp_path):
+    first = {"cache_read_input_tokens": 10, "cache_creation_input_tokens": 900}
+    last = {"cache_read_input_tokens": 118_000,
+            "cache_creation": {"ephemeral_5m_input_tokens": 0,
+                               "ephemeral_1h_input_tokens": 4_000}}
+    path = _write(tmp_path / "s.jsonl", [
+        _record(NOW, "claude-opus-5", first, "m1"),
+        _record(NOW, "claude-opus-5", last, "m2"),
+    ])
+    assert last_cache_io(path) == (118_000, 4_000)
+
+
+def test_last_cache_io_none_without_api_calls(tmp_path):
+    path = _write(tmp_path / "s.jsonl", ['{"type":"user"}'])
+    assert last_cache_io(path) is None

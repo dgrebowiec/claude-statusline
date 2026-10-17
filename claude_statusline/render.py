@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from . import config as config_module
-from .cache import cache_status
+from .cache import cache_status, last_cache_io
 from .config import Config
 from .usage import share_numbers
 
@@ -29,6 +29,8 @@ STYLES = {
     "tier_1h": "34",       # blue
     "tier_5m": "35",       # magenta
     "expired": "2;31",     # dim red
+    "cache_read": "32",    # green: a read is a cache hit
+    "cache_write": "33",   # yellow: a write costs more than a plain input
 }
 
 BAR_WIDTH = 20
@@ -74,6 +76,9 @@ class Sources:
 
     def cache(self, transcript: str) -> Optional[Tuple[str, float]]:
         return cache_status(transcript)
+
+    def cache_io(self, transcript: str) -> Optional[Tuple[int, int]]:
+        return last_cache_io(transcript)
 
     def share(self, transcript: str, hours: int, used: float,
               now: float) -> Optional[Tuple[float, float, float]]:
@@ -158,6 +163,20 @@ def _cache(f: Frame) -> str:
     return text
 
 
+def _cacheio(f: Frame) -> str:
+    io = f.sources.cache_io(f.transcript) if f.transcript else None
+    if io is None:
+        return "cache i/o: " + paint("none", "dim", f.on)
+    read, write = io
+    if f.config.level == "minimal":
+        return paint(f"r {fmt_tokens(read)} w {fmt_tokens(write)}", "dim", f.on)
+    if f.config.level == "detailed":
+        return ("cache read " + paint(f"{read:,}", "cache_read", f.on) + ", write "
+                + paint(f"{write:,}", "cache_write", f.on) + " tokens in the last call")
+    return ("cache read " + paint(fmt_tokens(read), "cache_read", f.on) + ", write "
+            + paint(fmt_tokens(write), "cache_write", f.on))
+
+
 def _reset_clock(resets_at: float, now: float, detailed: bool) -> str:
     """Local time of a limit reset: HH:MM today, DD.MM HH:MM on later days."""
     reset = datetime.fromtimestamp(resets_at)
@@ -221,6 +240,7 @@ BUILDERS: Dict[str, Callable[[Frame], Optional[str]]] = {
     "5h": _limit("5h"),
     "7d": _limit("7d"),
     "share": _share,
+    "cacheio": _cacheio,
 }
 
 
@@ -267,6 +287,9 @@ class DemoSources(Sources):
 
     def cache(self, transcript: str) -> Optional[Tuple[str, float]]:
         return "1h", DEMO_NOW + 2400
+
+    def cache_io(self, transcript: str) -> Optional[Tuple[int, int]]:
+        return 118_432, 4_120
 
     def share(self, transcript, hours, used, now):
         if hours == 5:
