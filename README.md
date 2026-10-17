@@ -19,6 +19,39 @@ Colours: model bold cyan, effort bold bright magenta; context and limit percenta
 red above; cache tier blue for `1h`, magenta for `5m`; session share italic cyan; the rest dim.
 Set `NO_COLOR=1` to turn colours off.
 
+## Configure
+
+Run the interactive editor. It shows a live preview after every change:
+
+```bash
+claude-statusline configure
+```
+
+Commands: a number shows or hides a field, `u<n>` / `d<n>` moves an enabled field up or down,
+`l` cycles the detail level (`minimal`, `normal`, `detailed`), `s` sets the separator, `c`
+toggles colours, `r` resets to defaults, `w` saves and exits, `q` quits without saving.
+
+Or set options directly:
+
+```bash
+claude-statusline config --level minimal --fields model,context,5h,7d --separator " · "
+claude-statusline config --colors off
+claude-statusline config --show       # print current settings
+claude-statusline config --reset      # back to defaults
+claude-statusline preview             # print a sample line with the current settings
+```
+
+Settings are stored in `~/.claude/claude-statusline.json` (override with the
+`CLAUDE_STATUSLINE_CONFIG` environment variable). Fields: `model`, `effort`, `context`, `cache`,
+`5h`, `7d`, `share`. The order in `fields` is the order on the line.
+
+Detail levels:
+
+- `minimal`: percentages only, no reset times or session share details.
+- `normal`: the default shown at the top of this page.
+- `detailed`: adds tokens left in the context, the cache TTL, weekday of the reset, and the
+  session's weighted tokens next to its share.
+
 ## Install
 
 Requires Python 3.9+ and no other packages.

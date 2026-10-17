@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from claude_statusline import __version__, cli
+from claude_statusline.config import Config
 from claude_statusline.render import render
 from claude_statusline.settings import install, uninstall
 
@@ -12,9 +13,10 @@ NOW = datetime.datetime(2026, 10, 17, 12, 0, 0, tzinfo=datetime.timezone.utc).ti
 
 
 @pytest.fixture(autouse=True)
-def plain_output(monkeypatch):
-    """Text assertions run without ANSI codes; colour is tested separately."""
+def isolated(monkeypatch, tmp_path):
+    """Text assertions run without ANSI codes and never read the user's own config."""
     monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("CLAUDE_STATUSLINE_CONFIG", str(tmp_path / "absent.json"))
 
 
 def _payload(pct=42, **extra):
@@ -103,7 +105,8 @@ def test_stdin_garbage_does_not_crash(monkeypatch, capsys):
 
 
 def test_version(capsys):
-    cli.main(["--version"])
+    with pytest.raises(SystemExit):
+        cli.main(["--version"])
     assert capsys.readouterr().out.strip() == __version__
 
 
@@ -134,3 +137,24 @@ def test_uninstall_only_removes_own_entry(tmp_path):
                     encoding="utf-8")
     assert uninstall(path) is False
     assert uninstall(tmp_path / "absent.json") is False
+
+
+def test_render_respects_fields_order_and_separator(tmp_path):
+    config = Config(level="normal", fields=["5h", "model"], separator=" · ")
+    line = render(_payload(rate_limits={"five_hour": {"used_percentage": 10}}), now=NOW,
+                  projects_dir=tmp_path / "p", cache_dir=tmp_path / "c", config=config)
+    assert line.startswith("5h: 10%")
+    assert line.endswith("Opus")
+    assert " · " in line and " | " not in line
+
+
+def test_minimal_is_shorter_than_detailed(tmp_path):
+    from claude_statusline.render import render as render_fn
+    payload = _payload(rate_limits={"five_hour": {"used_percentage": 63.4,
+                                                  "resets_at": NOW + 9000}})
+    common = dict(now=NOW, projects_dir=tmp_path / "p", cache_dir=tmp_path / "c")
+    minimal = render_fn(payload, config=Config(level="minimal"), **common)
+    detailed = render_fn(payload, config=Config(level="detailed"), **common)
+    assert len(minimal) < len(detailed)
+    assert "5h: 63%" in minimal and "(reset" not in minimal
+    assert "left)" in detailed  # detailed shows tokens left in the context

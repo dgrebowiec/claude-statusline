@@ -5,7 +5,7 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 from .pricing import weighted
 from .transcript import usage_record
@@ -74,11 +74,22 @@ def session_total(transcript: str, now: float, hours: int) -> float:
     return _total(calls)
 
 
-def session_share(transcript: str, hours: int, limit_used_pct: float, projects_dir: str,
-                  cache_dir: Path, now: Optional[float] = None) -> Optional[float]:
-    """Estimated percent of the limit used by this session: used% x (session / window)."""
+def share_numbers(transcript: str, hours: int, limit_used_pct: float, projects_dir: str,
+                  cache_dir: Path, now: Optional[float] = None
+                  ) -> Optional[Tuple[float, float, float]]:
+    """(share %, session weighted tokens, window weighted tokens); None when the window is empty.
+
+    The share is used% x (session / window): an estimate, see README.
+    """
     now = time.time() if now is None else now
     window = cached_window_total(hours, projects_dir, cache_dir, now)
     if window <= 0:
         return None
-    return limit_used_pct * session_total(transcript, now, hours) / window
+    session = session_total(transcript, now, hours)
+    return limit_used_pct * session / window, session, window
+
+
+def session_share(transcript: str, hours: int, limit_used_pct: float, projects_dir: str,
+                  cache_dir: Path, now: Optional[float] = None) -> Optional[float]:
+    numbers = share_numbers(transcript, hours, limit_used_pct, projects_dir, cache_dir, now)
+    return None if numbers is None else numbers[0]

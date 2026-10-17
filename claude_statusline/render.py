@@ -1,12 +1,15 @@
 """Builds the one-line status from the JSON Claude Code passes on stdin."""
 import os
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from . import config as config_module
 from .cache import cache_status
-from .usage import session_share
+from .config import Config
+from .usage import share_numbers
 
 DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 DEFAULT_CACHE_DIR = Path.home() / ".cache" / "claude-statusline"
@@ -17,9 +20,9 @@ STYLES = {
     "model": "1;36",       # bold cyan
     "effort": "1;95",      # bold bright magenta
     "sep": "2",            # dim
-    "ok": "32",            # green
     "warn": "33",          # yellow
     "bad": "31",           # red
+    "ok": "32",            # green
     "dim": "2",
     "label": "1",          # bold
     "share": "3;36",       # italic cyan
@@ -29,12 +32,12 @@ STYLES = {
 }
 
 BAR_WIDTH = 20
-LIMITS = (("five_hour", "5h", 5), ("seven_day", "7d", 168))  # key, label, window hours
+LIMITS = {"5h": ("five_hour", 5), "7d": ("seven_day", 168)}  # field -> (payload key, hours)
 
 
-def colours_enabled() -> bool:
-    """Respects NO_COLOR (https://no-color.org)."""
-    return "NO_COLOR" not in os.environ
+def colours_enabled(config: Config) -> bool:
+    """Colours need the config setting on and no NO_COLOR (https://no-color.org)."""
+    return config.colors and "NO_COLOR" not in os.environ
 
 
 def paint(text: str, style: str, enabled: bool) -> str:
@@ -58,95 +61,204 @@ def fmt_tokens(n: float) -> str:
     return f"{int(n) // 1000}k"
 
 
-def _model_name(payload: Dict[str, Any]) -> str:
-    model = payload.get("model") or {}
-    return model.get("display_name") or model.get("id") or "?"
+class Sources:
+    """Where cache state and session share come from. The preview swaps in fixed values."""
+
+    def __init__(self, projects_dir: Path = DEFAULT_PROJECTS_DIR,
+                 cache_dir: Path = DEFAULT_CACHE_DIR):
+        self.projects_dir = projects_dir
+        self.cache_dir = cache_dir
+
+    def has_transcript(self, path: str) -> bool:
+        return os.path.isfile(path)
+
+    def cache(self, transcript: str) -> Optional[Tuple[str, float]]:
+        return cache_status(transcript)
+
+    def share(self, transcript: str, hours: int, used: float,
+              now: float) -> Optional[Tuple[float, float, float]]:
+        return share_numbers(transcript, hours, used, str(self.projects_dir),
+                             self.cache_dir, now)
 
 
-def _context_part(payload: Dict[str, Any], on: bool) -> Optional[str]:
-    """Bar, percent, size and warnings; None when Claude Code sent no context data."""
-    context = payload.get("context_window") or {}
+@dataclass
+class Frame:
+    """Everything one render needs; each field builder reads from here."""
+    payload: Dict[str, Any]
+    now: float
+    config: Config
+    sources: Sources
+    transcript: Optional[str]
+    on: bool
+
+
+def _model(f: Frame) -> str:
+    model = f.payload.get("model") or {}
+    name = model.get("display_name") or model.get("id") or "?"
+    text = paint(name, "model", f.on)
+    effort = (f.payload.get("effort") or {}).get("level")
+    if effort:
+        text += " " + paint(f"(effort: {effort})", "effort", f.on)
+    return text
+
+
+def _context(f: Frame) -> str:
+    context = f.payload.get("context_window") or {}
     pct = context.get("used_percentage")
     if pct is None:
-        return None
+        return "context: " + paint("no data", "dim", f.on)
     pct_int = int(float(pct))
     style = level(pct_int)
+    if f.config.level == "minimal":
+        return paint(f"{pct_int}%", style, f.on)
     filled = min(pct_int * BAR_WIDTH // 100, BAR_WIDTH)
     bar = "#" * filled + "-" * (BAR_WIDTH - filled)
-    out = paint(f"[{bar}] {pct_int}%", style, on)
+    out = paint(f"[{bar}] {pct_int}%", style, f.on)
     tokens = context.get("total_input_tokens")
     size = context.get("context_window_size")
     if tokens is not None and size is not None:
-        out += " " + paint(f"({fmt_tokens(tokens)}/{fmt_tokens(size)})", "dim", on)
+        detail = f"({fmt_tokens(tokens)}/{fmt_tokens(size)}"
+        if f.config.level == "detailed":
+            detail += f", {fmt_tokens(size - tokens)} left"
+        out += " " + paint(detail + ")", "dim", f.on)
     if style == "bad":
-        out += " " + paint("!! FULL: run /compact or start a new session", "bad", on)
+        out += " " + paint("!! FULL: run /compact or start a new session", "bad", f.on)
     elif style == "warn":
-        out += " " + paint("! high", "warn", on)
+        out += " " + paint("! high", "warn", f.on)
     return out
 
 
-def _cache_part(transcript: Optional[str], now: float, on: bool) -> str:
-    """Absolute local expiry time: the statusline is not redrawn on a timer, so a countdown would freeze."""
-    status = cache_status(transcript) if transcript else None
+def _cache(f: Frame) -> str:
+    status = f.sources.cache(f.transcript) if f.transcript else None
     if status is None:
-        return "cache: " + paint("none", "dim", on)
+        return "cache: " + paint("none", "dim", f.on)
     tier, expires_at = status
-    tier_style = f"tier_{tier}"
+    style = f"tier_{tier}"
     clock = datetime.fromtimestamp(expires_at).strftime("%H:%M:%S")
-    head = "cache " + paint(tier, tier_style, on) + ": "
-    if expires_at <= now:
-        return head + paint(f"expired at {clock}", "expired", on)
-    return head + "until " + paint(clock, tier_style, on)
+    head = "cache " + paint(tier, style, f.on)
+    if expires_at <= f.now:
+        return head + ": " + paint(f"expired at {clock}", "expired", f.on)
+    text = head + ": until " + paint(clock, style, f.on)
+    if f.config.level == "detailed":
+        text += " " + paint(f"(ttl {'60m' if tier == '1h' else '5m'})", "dim", f.on)
+    return text
 
 
-def _reset_clock(resets_at: float, now: float) -> str:
-    """Local time of a limit reset: HH:MM today, with the date (DD.MM HH:MM) on later days."""
+def _reset_clock(resets_at: float, now: float, detailed: bool) -> str:
+    """Local time of a limit reset: HH:MM today, DD.MM HH:MM on later days."""
     reset = datetime.fromtimestamp(resets_at)
     if reset.date() == datetime.fromtimestamp(now).date():
-        return reset.strftime("%H:%M")
-    return reset.strftime("%d.%m %H:%M")
+        text = reset.strftime("%H:%M")
+    else:
+        text = reset.strftime("%d.%m %H:%M")
+    if detailed:
+        text += reset.strftime(" (%a)")
+    return text
 
 
-def _limit_parts(payload: Dict[str, Any], transcript: Optional[str], now: float,
-                 projects_dir: Path, cache_dir: Path, on: bool) -> List[str]:
-    rate_limits = payload.get("rate_limits") or {}
-    parts = []
-    for key, label, hours in LIMITS:
-        window = rate_limits.get(key) or {}
+def _limit(name: str) -> Callable[[Frame], Optional[str]]:
+    key = LIMITS[name][0]
+
+    def build(f: Frame) -> Optional[str]:
+        window = (f.payload.get("rate_limits") or {}).get(key) or {}
         used = window.get("used_percentage")
         if used is None:
-            continue
+            return None
         pct = int(float(used))
-        text = paint(label, "label", on) + ": " + paint(f"{pct}%", level(pct), on)
+        text = paint(name, "label", f.on) + ": " + paint(f"{pct}%", level(pct), f.on)
+        if f.config.level == "minimal":
+            return text
         resets_at = window.get("resets_at")
-        if resets_at is not None and resets_at > now:
-            text += " " + paint(f"(reset {_reset_clock(resets_at, now)})", "dim", on)
-        if transcript:
-            value = session_share(transcript, hours, float(used), str(projects_dir),
-                                  cache_dir, now)
-            if value is not None:
-                text += " " + paint(f"(session ~{value:.1f}%)", "share", on)
+        if resets_at is not None and resets_at > f.now:
+            clock = _reset_clock(resets_at, f.now, f.config.level == "detailed")
+            text += " " + paint(f"(reset {clock})", "dim", f.on)
+        return text
+
+    return build
+
+
+def _share(f: Frame) -> Optional[str]:
+    if not f.transcript:
+        return None
+    parts = []
+    for name, (key, hours) in LIMITS.items():
+        used = ((f.payload.get("rate_limits") or {}).get(key) or {}).get("used_percentage")
+        if used is None:
+            continue
+        numbers = f.sources.share(f.transcript, hours, float(used), f.now)
+        if numbers is None:
+            continue
+        share, session, window = numbers
+        text = f"{name} ~{share:.1f}%"
+        if f.config.level == "detailed":
+            text += f" ({fmt_tokens(session)} of {fmt_tokens(window)} wt)"
         parts.append(text)
-    return parts
+    if not parts:
+        return None
+    prefix = "session " if f.config.level == "minimal" else "session: "
+    return paint(prefix + " · ".join(parts), "share", f.on)
+
+
+BUILDERS: Dict[str, Callable[[Frame], Optional[str]]] = {
+    "model": _model,
+    "effort": lambda f: None,  # effort is drawn next to the model, see _model
+    "context": _context,
+    "cache": _cache,
+    "5h": _limit("5h"),
+    "7d": _limit("7d"),
+    "share": _share,
+}
+
+
+def build(payload: Dict[str, Any], now: float, config: Config, sources: Sources) -> str:
+    on = colours_enabled(config)
+    transcript = payload.get("transcript_path") or None
+    if transcript and not sources.has_transcript(transcript):
+        transcript = None
+    frame = Frame(payload, now, config, sources, transcript, on)
+    parts: List[str] = [text for text in (BUILDERS[name](frame) for name in config.fields)
+                        if text]
+    return paint(config.separator, "sep", on).join(parts)
 
 
 def render(payload: Dict[str, Any], now: Optional[float] = None,
            projects_dir: Path = DEFAULT_PROJECTS_DIR,
-           cache_dir: Path = DEFAULT_CACHE_DIR) -> str:
+           cache_dir: Path = DEFAULT_CACHE_DIR,
+           config: Optional[Config] = None, sources: Optional[Sources] = None) -> str:
     now = time.time() if now is None else now
-    on = colours_enabled()
-    transcript = payload.get("transcript_path") or None
-    if transcript and not os.path.isfile(transcript):
-        transcript = None
-    context = _context_part(payload, on)
-    if context is None:
-        context = "context: " + paint("no data", "dim", on)
-    model = paint(_model_name(payload), "model", on)
-    effort = (payload.get("effort") or {}).get("level")
-    if effort:
-        model += " " + paint(f"(effort: {effort})", "effort", on)
-    parts = [model, context,
-             _cache_part(transcript, now, on)]
-    parts += _limit_parts(payload, transcript, now, projects_dir, cache_dir, on)
-    separator = " " + paint("|", "sep", on) + " "
-    return separator.join(parts)
+    config = config if config is not None else config_module.load()
+    sources = sources or Sources(projects_dir, cache_dir)
+    return build(payload, now, config, sources)
+
+
+DEMO_NOW = 1_800_000_000.0
+DEMO_PAYLOAD: Dict[str, Any] = {
+    "model": {"display_name": "Opus 5.5"},
+    "effort": {"level": "high"},
+    "context_window": {"used_percentage": 42, "total_input_tokens": 420_000,
+                       "context_window_size": 1_000_000},
+    "transcript_path": "demo",
+    "rate_limits": {
+        "five_hour": {"used_percentage": 72, "resets_at": DEMO_NOW + 5400},
+        "seven_day": {"used_percentage": 96, "resets_at": DEMO_NOW + 300_000},
+    },
+}
+
+
+class DemoSources(Sources):
+    """Fixed numbers for the preview: nothing is read from disk."""
+
+    def has_transcript(self, path: str) -> bool:
+        return True
+
+    def cache(self, transcript: str) -> Optional[Tuple[str, float]]:
+        return "1h", DEMO_NOW + 2400
+
+    def share(self, transcript, hours, used, now):
+        if hours == 5:
+            return 23.2, 1_180_000, 5_100_000
+        return 0.6, 1_180_000, 196_000_000
+
+
+def preview(config: Config) -> str:
+    return build(DEMO_PAYLOAD, DEMO_NOW, config, DemoSources())
