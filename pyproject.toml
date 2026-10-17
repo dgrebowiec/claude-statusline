@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "claude-statusline"
-version = "0.1.0"
+dynamic = ["version"]  # from claude_statusline/__init__.py
 description = "Claude Code status line: context size, 5h/7d plan limits, prompt cache TTL and this session's share of the limits."
 readme = "README.md"
 license = { text = "MIT" }
@@ -19,6 +19,9 @@ claude-statusline = "claude_statusline.cli:main"
 
 [tool.setuptools]
 packages = ["claude_statusline"]
+
+[tool.setuptools.dynamic]
+version = { attr = "claude_statusline.__version__" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
