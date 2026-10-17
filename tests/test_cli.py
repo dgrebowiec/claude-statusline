@@ -158,3 +158,12 @@ def test_minimal_is_shorter_than_detailed(tmp_path):
     assert len(minimal) < len(detailed)
     assert "5h: 63%" in minimal and "(reset" not in minimal
     assert "left)" in detailed  # detailed shows tokens left in the context
+
+
+def test_effort_field_can_be_turned_off_or_shown_alone(tmp_path):
+    payload = _payload(effort={"level": "high"})
+    common = dict(now=NOW, projects_dir=tmp_path / "p", cache_dir=tmp_path / "c")
+    without = render(payload, config=Config(fields=["model", "context"]), **common)
+    assert "effort" not in without
+    alone = render(payload, config=Config(fields=["effort", "context"]), **common)
+    assert alone.startswith("effort: high | ")

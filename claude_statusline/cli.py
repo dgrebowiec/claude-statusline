@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 from . import __version__
 from . import config as config_module
 from .config import FIELDS, LEVELS, Config
-from .configure import run as run_configure
+from .configure import main as run_configure
 from .render import preview, render
 from .settings import default_settings_path, install, uninstall
 

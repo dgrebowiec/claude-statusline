@@ -96,10 +96,24 @@ def _model(f: Frame) -> str:
     model = f.payload.get("model") or {}
     name = model.get("display_name") or model.get("id") or "?"
     text = paint(name, "model", f.on)
-    effort = (f.payload.get("effort") or {}).get("level")
-    if effort:
-        text += " " + paint(f"(effort: {effort})", "effort", f.on)
+    if "effort" in f.config.fields:
+        effort = _effort_text(f)
+        if effort:
+            text += " " + paint(f"({effort})", "effort", f.on)
     return text
+
+
+def _effort_text(f: Frame) -> Optional[str]:
+    level_name = (f.payload.get("effort") or {}).get("level")
+    return f"effort: {level_name}" if level_name else None
+
+
+def _effort(f: Frame) -> Optional[str]:
+    """Effort sits next to the model; on its own only when the model field is off."""
+    if "model" in f.config.fields:
+        return None
+    text = _effort_text(f)
+    return paint(text, "effort", f.on) if text else None
 
 
 def _context(f: Frame) -> str:
@@ -201,7 +215,7 @@ def _share(f: Frame) -> Optional[str]:
 
 BUILDERS: Dict[str, Callable[[Frame], Optional[str]]] = {
     "model": _model,
-    "effort": lambda f: None,  # effort is drawn next to the model, see _model
+    "effort": _effort,
     "context": _context,
     "cache": _cache,
     "5h": _limit("5h"),

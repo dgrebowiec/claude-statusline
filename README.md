@@ -21,15 +21,27 @@ Set `NO_COLOR=1` to turn colours off.
 
 ## Configure
 
-Run the interactive editor. It shows a live preview after every change:
+Run the interactive editor. It shows a live preview at the bottom after every change:
 
 ```bash
 claude-statusline configure
 ```
 
-Commands: a number shows or hides a field, `u<n>` / `d<n>` moves an enabled field up or down,
-`l` cycles the detail level (`minimal`, `normal`, `detailed`), `s` sets the separator, `c`
-toggles colours, `r` resets to defaults, `w` saves and exits, `q` quits without saving.
+| Key | Action |
+| --- | --- |
+| `↑` `↓` (or `k` `j`) | select a field |
+| `space` (or a digit `1`-`7`) | show / hide the field |
+| `u` `d` (or `Shift+↑` `Shift+↓`) | move the field up / down |
+| `←` `→` | detail level: `minimal`, `normal`, `detailed` |
+| `s` / `S` | next separator preset / type your own |
+| `c` | colours on / off |
+| `r` | reset to defaults |
+| `enter` | save and exit |
+| `q` / `Esc` | quit (asks again if there are unsaved changes) |
+
+When the input is not a terminal (for example piped), it falls back to text commands, one per
+line: a number toggles a field, `u<n>` / `d<n>` moves one, `l` level, `s` separator, `c`
+colours, `r` reset, `w` save, `q` quit.
 
 Or set options directly:
 

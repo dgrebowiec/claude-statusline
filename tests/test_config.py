@@ -92,3 +92,76 @@ def test_cli_preview_prints_a_line(monkeypatch, capsys, tmp_path):
     monkeypatch.setenv("CLAUDE_STATUSLINE_CONFIG", str(tmp_path / "c.json"))
     cli.main(["preview"])
     assert "Opus 5.5" in capsys.readouterr().out
+
+
+# --- full-screen editor: key handling ---
+
+from claude_statusline.configure import Editor, decode_key  # noqa: E402
+
+
+def _press(editor, *keys, ask=lambda prompt: ""):
+    result = None
+    for key in keys:
+        result = editor.handle_key(key, ask)
+    return result
+
+
+def test_decode_key_arrows_and_specials():
+    assert decode_key("\x1b[A") == "up"
+    assert decode_key("\x1bOB") == "down"
+    assert decode_key("\x1b[1;2A") == "shift-up"
+    assert decode_key(" ") == "space"
+    assert decode_key("\n") == "enter"
+    assert decode_key("q") == "q"
+    assert decode_key("\x1b[99~") == ""
+
+
+def test_editor_cursor_toggle_and_follow():
+    editor = Editor(Config())
+    _press(editor, "down", "space")  # hide "effort"
+    assert "effort" not in editor.config.fields
+    assert editor.cursor == len(editor.config.fields)  # cursor follows it to the hidden part
+    _press(editor, "space")  # show it again: appended at the end of the enabled fields
+    assert editor.config.fields[-1] == "effort"
+
+
+def test_editor_move_and_level_with_arrows():
+    editor = Editor(Config())
+    _press(editor, "d")  # move "model" down
+    assert editor.config.fields[:2] == ["effort", "model"]
+    assert editor.cursor == 1
+    _press(editor, "right")
+    assert editor.config.level == "detailed"
+    _press(editor, "left", "left")
+    assert editor.config.level == "minimal"
+
+
+def test_editor_separator_presets_and_custom():
+    editor = Editor(Config())
+    _press(editor, "s")
+    assert editor.config.separator == " · "
+    _press(editor, "S", ask=lambda prompt: " >> ")
+    assert editor.config.separator == " >> "
+
+
+def test_editor_quit_asks_twice_when_dirty():
+    editor = Editor(Config())
+    assert _press(editor, "q") == "quit"  # nothing changed: quits at once
+    editor = Editor(Config())
+    _press(editor, "c")
+    assert _press(editor, "q") is None and "unsaved" in editor.message
+    assert _press(editor, "q") == "quit"
+
+
+def test_editor_enter_saves_and_digits_toggle():
+    editor = Editor(Config())
+    assert _press(editor, "7") is None  # toggle field 7 ("share")
+    assert "share" not in editor.config.fields
+    assert _press(editor, "enter") == "save"
+
+
+def test_editor_screen_shows_preview_and_cursor():
+    editor = Editor(Config())
+    lines = editor.screen(100)
+    assert any("Opus 5.5" in line for line in lines)
+    assert any("\033[7m" in line for line in lines)  # highlighted row
