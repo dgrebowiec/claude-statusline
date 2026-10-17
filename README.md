@@ -151,3 +151,7 @@ share is too high. The 5-hour and 7-day window totals are cached for 60 s and 5 
 pip install -e .[test]
 pytest
 ```
+
+## License
+
+[MIT](LICENSE)
