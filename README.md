@@ -31,7 +31,32 @@ claude-statusline install
 `install` sets `statusLine` in `~/.claude/settings.json` and keeps a backup of the file.
 Restart Claude Code or send a message to see it.
 
-To remove it: `claude-statusline uninstall` (it only removes an entry that points to this tool).
+## Uninstall
+
+1. Remove the status line from Claude Code's settings:
+
+   ```bash
+   claude-statusline uninstall
+   ```
+
+   This deletes only the `statusLine` entry when it points to this tool, and keeps a backup of
+   `settings.json`. If you want the previous status line back, copy the most recent
+   `~/.claude/settings.json.bak-*` over `settings.json`.
+
+2. Remove the program:
+
+   ```bash
+   pipx uninstall claude-statusline
+   # or: uv tool uninstall claude-statusline
+   ```
+
+3. Optional: delete the cache of window totals:
+
+   ```bash
+   rm -rf ~/.cache/claude-statusline
+   ```
+
+Restart Claude Code (or send a message) after uninstalling so the change takes effect.
 
 Without installing, you can also clone the repo and run `python -m claude_statusline`
 from it (set `statusLine.command` to that command by hand).
