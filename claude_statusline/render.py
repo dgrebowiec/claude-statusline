@@ -15,6 +15,7 @@ RESET = "\033[0m"
 # Style name -> SGR parameters. Colours are chosen so each kind of data reads as its own group.
 STYLES = {
     "model": "1;36",       # bold cyan
+    "effort": "1;95",      # bold bright magenta
     "sep": "2",            # dim
     "ok": "32",            # green
     "warn": "33",          # yellow
@@ -140,7 +141,11 @@ def render(payload: Dict[str, Any], now: Optional[float] = None,
     context = _context_part(payload, on)
     if context is None:
         context = "context: " + paint("no data", "dim", on)
-    parts = [paint(_model_name(payload), "model", on), context,
+    model = paint(_model_name(payload), "model", on)
+    effort = (payload.get("effort") or {}).get("level")
+    if effort:
+        model += " " + paint(f"(effort: {effort})", "effort", on)
+    parts = [model, context,
              _cache_part(transcript, now, on)]
     parts += _limit_parts(payload, transcript, now, projects_dir, cache_dir, on)
     separator = " " + paint("|", "sep", on) + " "

@@ -7,6 +7,7 @@ A status line for Claude Code that shows what you need to decide between `/compa
 Haiku 5.5 | [##------------------] 12% (118k/1.0M) | cache 1h: until 16:30:26 | 5h: 17% (reset 17:03) (session ~4.6%) | 7d: 96% (reset 21.10 02:53) (session ~0.5%)
 ```
 
+- **Model and effort:** model name and the effort level (`effort: high` etc.) when Claude Code reports it.
 - **Context:** share of the window used, tokens used / window size, warnings at 70% and 85%.
 - **Prompt cache:** tier of the last cache write (`5m` or `1h`) and time until it expires.
 - **Plan limits:** 5-hour and 7-day usage with time until reset, from Claude Code's own data.
@@ -14,7 +15,7 @@ Haiku 5.5 | [##------------------] 12% (118k/1.0M) | cache 1h: until 16:30:26 | 
 
 It uses 0 tokens: it only reads local data and never calls the model.
 
-Colours: model bold cyan; context and limit percentages green below 70%, yellow below 85%,
+Colours: model bold cyan, effort bold bright magenta; context and limit percentages green below 70%, yellow below 85%,
 red above; cache tier blue for `1h`, magenta for `5m`; session share italic cyan; the rest dim.
 Set `NO_COLOR=1` to turn colours off.
 

@@ -46,6 +46,12 @@ def test_render_thresholds(tmp_path):
     assert "high" not in _render(tmp_path, _payload(pct=10))
 
 
+def test_render_shows_effort_next_to_model(tmp_path):
+    line = _render(tmp_path, _payload(effort={"level": "high"}))
+    assert line.startswith("Opus (effort: high) | ")
+    assert _render(tmp_path, _payload()).startswith("Opus | ")
+
+
 def test_render_no_context_data(tmp_path):
     line = _render(tmp_path, {"model": {"id": "x"}})
     assert line.startswith("x | context: no data")
