@@ -10,6 +10,8 @@ Haiku 5.5 | [##------------------] 12% (118k/1.0M) | cache 1h: until 16:30:26 | 
 - **Model and effort:** model name and the effort level (`effort: high` etc.) when Claude Code reports it.
 - **Context:** share of the window used, tokens used / window size, warnings at 70% and 85%.
 - **Prompt cache:** tier of the last cache write (`5m` or `1h`) and time until it expires.
+- **Cache reads and writes (optional `cacheio` field):** tokens read from and written to the
+  prompt cache by the last API call, e.g. `cache read 118k, write 4k`.
 - **Plan limits:** 5-hour and 7-day usage with time until reset, from Claude Code's own data.
 - **Session share:** estimate of how much of each limit this session used.
 
@@ -30,7 +32,7 @@ claude-statusline configure
 | Key | Action |
 | --- | --- |
 | `↑` `↓` (or `k` `j`) | select a field |
-| `space` (or a digit `1`-`7`) | show / hide the field |
+| `space` (or a digit `1`-`8`) | show / hide the field |
 | `u` `d` (or `Shift+↑` `Shift+↓`) | move the field up / down (hidden fields too; space never moves a row) |
 | `←` `→` | detail level: `minimal`, `normal`, `detailed` |
 | `s` / `S` | next separator preset / type your own |
@@ -55,14 +57,24 @@ claude-statusline preview             # print a sample line with the current set
 
 Settings are stored in `~/.claude/claude-statusline.json` (override with the
 `CLAUDE_STATUSLINE_CONFIG` environment variable). Fields: `model`, `effort`, `context`, `cache`,
-`5h`, `7d`, `share`. The order in `fields` is the order on the line.
+`5h`, `7d`, `share`, `cacheio` (off by default; turn it on with `claude-statusline configure`
+or `--fields`). The order in `fields` is the order on the line.
 
 Detail levels:
 
 - `minimal`: percentages only, no reset times or session share details.
 - `normal`: the default shown at the top of this page.
 - `detailed`: adds tokens left in the context, the cache TTL, weekday of the reset, and the
-  session's weighted tokens next to its share.
+  session's weighted tokens next to its share. The `cacheio` field shows exact token counts.
+
+`cacheio` shows what the last API call did with the prompt cache: `read` is tokens served from
+(a cache hit), `write` is tokens newly stored in it. `minimal` shows `r 118k w 4k`; `detailed`
+shows exact counts. It reads the same transcript as `cache`, so it shows `cache i/o: none` until
+the first call of the session.
+
+It shows only the last call, not the whole session. Each call re-reads the context from the cache,
+so summing all calls would count the same context many times over. For the whole session's cache
+reads and writes, see the report of [claude-token-report](https://github.com/dgrebowiec/claude-token-report).
 
 ## Install
 
@@ -129,6 +141,7 @@ share is too high. The 5-hour and 7-day window totals are cached for 60 s and 5 
   not on a timer.
 - Cache expiry is estimated from the last cache write or read in the transcript; the server may
   differ slightly.
+- `cacheio` counts only the last call of the main transcript; subagent calls are not included.
 - Reset times and limit percentages come from Claude Code; they are not shown when Claude Code
   does not send them (e.g. with an API key).
 

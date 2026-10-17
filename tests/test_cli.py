@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from claude_statusline import __version__, cli
-from claude_statusline.config import Config
+from claude_statusline.config import FIELDS, Config
 from claude_statusline.render import render
 from claude_statusline.settings import install, uninstall
 
@@ -174,3 +174,34 @@ def test_render_shows_the_window_size_claude_code_reports(tmp_path):
     payload["context_window"] = {"used_percentage": 50, "total_input_tokens": 100_000,
                                  "context_window_size": 200_000}
     assert "(100k/200k)" in _render(tmp_path, payload)
+
+
+def test_cacheio_shows_reads_and_writes_of_last_call(tmp_path):
+    usage = {"cache_read_input_tokens": 118_432,
+             "cache_creation": {"ephemeral_5m_input_tokens": 0,
+                                "ephemeral_1h_input_tokens": 4_120}}
+    record = {"timestamp": "2026-10-17T11:59:00.000Z",
+              "message": {"id": "m1", "model": "claude-opus-5", "usage": usage}}
+    transcript = tmp_path / "s.jsonl"
+    transcript.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    payload = _payload(transcript_path=str(transcript))
+    common = dict(now=NOW, projects_dir=tmp_path / "p", cache_dir=tmp_path / "c")
+    fields = ["cacheio"]
+    normal = render(payload, config=Config(fields=fields), **common)
+    assert normal == "cache read 118k, write 4k"
+    minimal = render(payload, config=Config(level="minimal", fields=fields), **common)
+    assert minimal == "r 118k w 4k"
+    detailed = render(payload, config=Config(level="detailed", fields=fields), **common)
+    assert detailed == "cache read 118,432, write 4,120 tokens in the last call"
+
+
+def test_cacheio_none_without_transcript(tmp_path):
+    config = Config(fields=["cacheio"])
+    line = render(_payload(), now=NOW, projects_dir=tmp_path / "p",
+                  cache_dir=tmp_path / "c", config=config)
+    assert line == "cache i/o: none"
+
+
+def test_cacheio_is_off_by_default():
+    assert "cacheio" not in Config().fields
+    assert "cacheio" in FIELDS

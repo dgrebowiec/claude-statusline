@@ -42,7 +42,8 @@ def _build_parser() -> argparse.ArgumentParser:
     cfg = sub.add_parser("config", help="change options without the editor")
     cfg.add_argument("--level", choices=LEVELS, help="detail level")
     cfg.add_argument("--fields", type=_parse_fields,
-                     help="comma-separated fields in display order, e.g. model,context,5h,7d")
+                     help="comma-separated fields in display order, e.g. model,context,5h,7d; "
+                          f"available: {', '.join(FIELDS)}")
     cfg.add_argument("--separator", help='text between fields, e.g. " · "')
     cfg.add_argument("--colors", choices=["on", "off"])
     cfg.add_argument("--show", action="store_true", help="print the current settings as JSON")
