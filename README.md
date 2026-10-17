@@ -78,7 +78,9 @@ reads and writes, see the report of [claude-token-report](https://github.com/dgr
 
 ## Install
 
-Requires Python 3.9+ and no other packages.
+Works on Linux, macOS and Windows. Requires Python 3.9+ and no other packages.
+
+**As a command** (recommended), with [pipx](https://pipx.pypa.io) or [uv](https://docs.astral.sh/uv/):
 
 ```bash
 pipx install git+https://github.com/dgrebowiec/claude-statusline
@@ -88,6 +90,33 @@ claude-statusline install
 
 `install` sets `statusLine` in `~/.claude/settings.json` and keeps a backup of the file.
 Restart Claude Code or send a message to see it.
+
+Try it once without installing: `uvx --from git+https://github.com/dgrebowiec/claude-statusline claude-statusline preview`
+
+**Or just clone it**, and run it from the clone:
+
+```bash
+git clone https://github.com/dgrebowiec/claude-statusline.git
+cd claude-statusline
+python3 -m claude_statusline preview
+```
+
+With a clone, set `statusLine.command` in `~/.claude/settings.json` to
+`python3 -m claude_statusline` by hand, because `install` writes the command name only.
+
+## Update
+
+With pipx or uv:
+
+```bash
+pipx upgrade claude-statusline        # or: uv tool upgrade claude-statusline
+claude-statusline --version           # shows the installed version
+```
+
+The `statusLine` entry in `settings.json` does not change on upgrade, so there is no need to run
+`install` again. Restart Claude Code or send a message to see the new version.
+
+With a clone, update it with `git pull` in the clone's directory.
 
 ## Uninstall
 
