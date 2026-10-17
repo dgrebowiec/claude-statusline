@@ -78,9 +78,9 @@ def _context_part(payload: Dict[str, Any], on: bool) -> Optional[str]:
     if tokens is not None and size is not None:
         out += " " + paint(f"({fmt_tokens(tokens)}/{fmt_tokens(size)})", "dim", on)
     if style == "bad":
-        out += " " + paint("!! PRZEPEŁNIENIE: użyj /compact lub nowej sesji", "bad", on)
+        out += " " + paint("!! FULL: run /compact or start a new session", "bad", on)
     elif style == "warn":
-        out += " " + paint("! uwaga", "warn", on)
+        out += " " + paint("! high", "warn", on)
     return out
 
 
@@ -88,14 +88,14 @@ def _cache_part(transcript: Optional[str], now: float, on: bool) -> str:
     """Absolute local expiry time: the statusline is not redrawn on a timer, so a countdown would freeze."""
     status = cache_status(transcript) if transcript else None
     if status is None:
-        return "cache: " + paint("brak", "dim", on)
+        return "cache: " + paint("none", "dim", on)
     tier, expires_at = status
     tier_style = f"tier_{tier}"
     clock = datetime.fromtimestamp(expires_at).strftime("%H:%M:%S")
     head = "cache " + paint(tier, tier_style, on) + ": "
     if expires_at <= now:
-        return head + paint(f"wygasł o {clock}", "expired", on)
-    return head + "do " + paint(clock, tier_style, on)
+        return head + paint(f"expired at {clock}", "expired", on)
+    return head + "until " + paint(clock, tier_style, on)
 
 
 def _reset_clock(resets_at: float, now: float) -> str:
@@ -124,7 +124,7 @@ def _limit_parts(payload: Dict[str, Any], transcript: Optional[str], now: float,
             value = session_share(transcript, hours, float(used), str(projects_dir),
                                   cache_dir, now)
             if value is not None:
-                text += " " + paint(f"(sesja ~{value:.1f}%)", "share", on)
+                text += " " + paint(f"(session ~{value:.1f}%)", "share", on)
         parts.append(text)
     return parts
 
@@ -139,7 +139,7 @@ def render(payload: Dict[str, Any], now: Optional[float] = None,
         transcript = None
     context = _context_part(payload, on)
     if context is None:
-        context = "kontekst: " + paint("brak danych", "dim", on)
+        context = "context: " + paint("no data", "dim", on)
     parts = [paint(_model_name(payload), "model", on), context,
              _cache_part(transcript, now, on)]
     parts += _limit_parts(payload, transcript, now, projects_dir, cache_dir, on)

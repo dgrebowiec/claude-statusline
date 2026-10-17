@@ -37,18 +37,18 @@ def test_render_context_and_no_transcript(tmp_path):
     assert line.startswith("Opus | ")
     assert "42%" in line
     assert "(42k/1.0M)" in line
-    assert line.endswith(" | cache: brak")
+    assert line.endswith(" | cache: none")
 
 
 def test_render_thresholds(tmp_path):
-    assert "! uwaga" in _render(tmp_path, _payload(pct=75))
-    assert "PRZEPEŁNIENIE" in _render(tmp_path, _payload(pct=90))
-    assert "uwaga" not in _render(tmp_path, _payload(pct=10))
+    assert "! high" in _render(tmp_path, _payload(pct=75))
+    assert "FULL" in _render(tmp_path, _payload(pct=90))
+    assert "high" not in _render(tmp_path, _payload(pct=10))
 
 
 def test_render_no_context_data(tmp_path):
     line = _render(tmp_path, {"model": {"id": "x"}})
-    assert line.startswith("x | kontekst: brak danych")
+    assert line.startswith("x | context: no data")
 
 
 def test_render_limits_show_reset_clock(tmp_path):
@@ -73,12 +73,12 @@ def test_render_cache_shows_absolute_expiry(tmp_path):
     transcript.write_text(json.dumps(record) + "\n", encoding="utf-8")
     expected = datetime.datetime.fromtimestamp(NOW - 60 + 3600).strftime("%H:%M:%S")
     line = _render(tmp_path, _payload(transcript_path=str(transcript)))
-    assert f"cache 1h: do {expected}" in line
+    assert f"cache 1h: until {expected}" in line
 
 
 def test_render_survives_missing_transcript(tmp_path):
     payload = _payload(transcript_path=str(tmp_path / "missing.jsonl"))
-    assert _render(tmp_path, payload).endswith(" | cache: brak")
+    assert _render(tmp_path, payload).endswith(" | cache: none")
 
 
 def test_colours_follow_levels_and_no_color(tmp_path, monkeypatch):
@@ -93,7 +93,7 @@ def test_colours_follow_levels_and_no_color(tmp_path, monkeypatch):
 def test_stdin_garbage_does_not_crash(monkeypatch, capsys):
     monkeypatch.setattr("sys.stdin", __import__("io").StringIO("{broken"))
     cli.main([])
-    assert capsys.readouterr().out.startswith("? | kontekst: brak danych")
+    assert capsys.readouterr().out.startswith("? | context: no data")
 
 
 def test_version(capsys):

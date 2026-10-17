@@ -4,7 +4,7 @@ A status line for Claude Code that shows what you need to decide between `/compa
 `/clear` and carrying on:
 
 ```
-Haiku 5.5 | [##------------------] 12% (118k/1.0M) | cache 1h: 59m54s | 5h: 17% (reset 2h29m) (sesja ~4.6%) | 7d: 96% (reset 83h19m) (sesja ~0.5%)
+Haiku 5.5 | [##------------------] 12% (118k/1.0M) | cache 1h: until 16:30:26 | 5h: 17% (reset 17:03) (session ~4.6%) | 7d: 96% (reset 21.10 02:53) (session ~0.5%)
 ```
 
 - **Context:** share of the window used, tokens used / window size, warnings at 70% and 85%.
