@@ -167,3 +167,10 @@ def test_effort_field_can_be_turned_off_or_shown_alone(tmp_path):
     assert "effort" not in without
     alone = render(payload, config=Config(fields=["effort", "context"]), **common)
     assert alone.startswith("effort: high | ")
+
+
+def test_render_shows_the_window_size_claude_code_reports(tmp_path):
+    payload = _payload()
+    payload["context_window"] = {"used_percentage": 50, "total_input_tokens": 100_000,
+                                 "context_window_size": 200_000}
+    assert "(100k/200k)" in _render(tmp_path, payload)
