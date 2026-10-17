@@ -51,14 +51,16 @@ def test_render_no_context_data(tmp_path):
     assert line.startswith("x | kontekst: brak danych")
 
 
-def test_render_limits_with_reset(tmp_path):
+def test_render_limits_show_reset_clock(tmp_path):
+    five_h = datetime.datetime.fromtimestamp(NOW + 9000).strftime("%H:%M")
+    seven_d = datetime.datetime.fromtimestamp(NOW + 300000)
     payload = _payload(rate_limits={
         "five_hour": {"used_percentage": 63.4, "resets_at": NOW + 9000},
         "seven_day": {"used_percentage": 18.2, "resets_at": NOW + 300000},
     })
     line = _render(tmp_path, payload)
-    assert "5h: 63% (reset 2h30m)" in line
-    assert "7d: 18% (reset 83h20m)" in line
+    assert f"5h: 63% (reset {five_h})" in line
+    assert f"7d: 18% (reset {seven_d.strftime('%d.%m %H:%M')})" in line
 
 
 def test_render_cache_shows_absolute_expiry(tmp_path):

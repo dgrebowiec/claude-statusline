@@ -98,6 +98,14 @@ def _cache_part(transcript: Optional[str], now: float, on: bool) -> str:
     return head + "do " + paint(clock, tier_style, on)
 
 
+def _reset_clock(resets_at: float, now: float) -> str:
+    """Local time of a limit reset: HH:MM today, with the date (DD.MM HH:MM) on later days."""
+    reset = datetime.fromtimestamp(resets_at)
+    if reset.date() == datetime.fromtimestamp(now).date():
+        return reset.strftime("%H:%M")
+    return reset.strftime("%d.%m %H:%M")
+
+
 def _limit_parts(payload: Dict[str, Any], transcript: Optional[str], now: float,
                  projects_dir: Path, cache_dir: Path, on: bool) -> List[str]:
     rate_limits = payload.get("rate_limits") or {}
@@ -110,10 +118,8 @@ def _limit_parts(payload: Dict[str, Any], transcript: Optional[str], now: float,
         pct = int(float(used))
         text = paint(label, "label", on) + ": " + paint(f"{pct}%", level(pct), on)
         resets_at = window.get("resets_at")
-        if resets_at is not None:
-            left = int(resets_at - now)
-            if left > 0:
-                text += " " + paint(f"(reset {left // 3600}h{left % 3600 // 60:02d}m)", "dim", on)
+        if resets_at is not None and resets_at > now:
+            text += " " + paint(f"(reset {_reset_clock(resets_at, now)})", "dim", on)
         if transcript:
             value = session_share(transcript, hours, float(used), str(projects_dir),
                                   cache_dir, now)
