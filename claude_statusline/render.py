@@ -5,13 +5,13 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
 
 from . import config as config_module
 from .cache import cache_status, last_cache_io
 from .config import Config
 from .samples import Samples
-from .transcript import tail_lines, usage_record
+from .transcript import parse_time, tail_lines
 from .usage import load_index, share_numbers
 
 DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
@@ -38,7 +38,10 @@ STYLES = {
 }
 
 BAR_WIDTH = 20
-ACTIVE_SECONDS = 30  # a subagent whose transcript changed this recently is shown as working
+# A subagent is working until its last reply ends its turn. One cut off without that (killed,
+# Claude Code closed) is dropped once its transcript has not changed for this long.
+STALE_SECONDS = 3600
+TOOL_WAIT_SHOWN = 60  # seconds of waiting for a tool before the line shows it
 LIMITS = {"5h": ("five_hour", 5), "7d": ("seven_day", 168)}  # field -> (payload key, hours)
 
 
@@ -112,8 +115,8 @@ class Sources:
             if used is not None and resets_at is not None:
                 self._samples.observe(hours, float(used), float(resets_at), now)
 
-    def agents(self, transcript: str, now: float) -> List[Tuple[str, str, Optional[int]]]:
-        """(transcript, agent type, context tokens of its last call) of subagents active now."""
+    def agents(self, transcript: str, now: float) -> List["AgentStatus"]:
+        """Subagents of the session that are working now, by transcript path."""
         folder = os.path.join(transcript[: -len(".jsonl")], "subagents")
         try:
             entries = list(os.scandir(folder))
@@ -122,11 +125,13 @@ class Sources:
         active = []
         for entry in entries:
             try:
-                if not entry.name.endswith(".jsonl") or now - entry.stat().st_mtime > ACTIVE_SECONDS:
+                if not entry.name.endswith(".jsonl") or now - entry.stat().st_mtime > STALE_SECONDS:
                     continue
             except OSError:
                 continue
-            active.append((entry.path, _agent_type(entry.path), _last_context(entry.path)))
+            status = _agent_status(entry.path)
+            if status is not None:
+                active.append(status)
         return sorted(active)
 
 
@@ -138,19 +143,51 @@ def _agent_type(transcript: str) -> str:
         return "agent"
 
 
-def _last_context(transcript: str) -> Optional[int]:
-    """Context size of the last call: uncached input + cache reads + cache writes."""
+class AgentStatus(NamedTuple):
+    path: str
+    name: str                # agent type from <transcript>.meta.json
+    context: Optional[int]   # context size of the last call
+    tool: Optional[str]      # tool it waits for, when the last reply asked for one
+    since: Optional[float]   # Unix time of that request
+
+
+def _agent_status(transcript: str) -> Optional[AgentStatus]:
+    """Status of a subagent from the end of its transcript; None when it has finished.
+
+    A finished subagent's last reply has stop_reason "end_turn". While a tool runs (a long
+    build, say), nothing is written, so the file's age says nothing about whether it works.
+    """
     try:
         lines = tail_lines(transcript, 200)
     except OSError:
         return None
+    context = tool = since = None
     for line in reversed(lines):
-        rec = usage_record(line)
-        if rec is not None:
-            usage = rec["usage"]
-            return sum(usage.get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens",
-                                                     "cache_creation_input_tokens"))
-    return None
+        if '"type":"assistant"' not in line.replace(" ", ""):
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        msg = rec.get("message") or {}
+        if context is None and msg.get("usage"):
+            usage = msg["usage"]
+            context = sum(usage.get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens",
+                                                        "cache_creation_input_tokens"))
+            if msg.get("stop_reason") == "end_turn":
+                return None
+            if msg.get("stop_reason") == "tool_use":
+                content = msg.get("content")
+                uses = [c for c in content if isinstance(c, dict) and c.get("type") == "tool_use"] \
+                    if isinstance(content, list) else []
+                if uses:
+                    tool = uses[-1].get("name")
+                    try:
+                        since = parse_time(rec["timestamp"]).timestamp()
+                    except (KeyError, ValueError, AttributeError):
+                        since = None
+            break
+    return AgentStatus(transcript, _agent_type(transcript), context, tool, since)
 
 
 @dataclass
@@ -308,12 +345,14 @@ def _agents(f: Frame) -> Optional[str]:
     window = (f.payload.get("rate_limits") or {}).get("five_hour") or {}
     used = window.get("used_percentage")
     parts = []
-    for path, name, context in f.sources.agents(f.transcript, f.now):
+    for path, name, context, tool, since in f.sources.agents(f.transcript, f.now):
         text = paint(name, "agent", f.on)
         if f.config.level == "minimal":
             parts.append(text + (f" {fmt_tokens(context)}" if context is not None else ""))
             continue
         details = []
+        if tool and since is not None and f.now - since >= TOOL_WAIT_SHOWN:
+            details.append(f"{tool} {int(f.now - since) // 60}m")
         if context is not None:
             details.append(f"ctx {fmt_tokens(context)}")
         if used is not None:
@@ -390,7 +429,7 @@ class DemoSources(Sources):
         pass
 
     def agents(self, transcript, now):
-        return [("demo/subagents/a.jsonl", "explorer", 82_000)]
+        return [AgentStatus("demo/subagents/a.jsonl", "explorer", 82_000, None, None)]
 
     def share(self, transcript, hours, used, now, resets_at=None, paths=None):
         if paths is not None:

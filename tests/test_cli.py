@@ -238,29 +238,36 @@ def test_cacheio_is_off_by_default():
     assert "cacheio" in FIELDS
 
 
-def test_render_shows_active_subagents(tmp_path):
+def test_render_shows_working_subagents(tmp_path):
     import os
-    when = datetime.datetime.fromtimestamp(NOW - 60, datetime.timezone.utc)
-    stamp = when.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
-    def call(key, usage):
-        return json.dumps({"timestamp": stamp, "message": {"id": key, "model": "claude-opus-5",
-                                                           "usage": usage}})
+    def call(key, usage, stop, minutes_ago, tool=None):
+        stamp = datetime.datetime.fromtimestamp(NOW - minutes_ago * 60, datetime.timezone.utc)
+        content = [{"type": "tool_use", "name": tool}] if tool else [{"type": "text"}]
+        return json.dumps({"type": "assistant",
+                           "timestamp": stamp.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                           "message": {"id": key, "model": "claude-opus-5", "usage": usage,
+                                       "stop_reason": stop, "content": content}})
 
     main = tmp_path / "projects" / "p" / "s.jsonl"
     main.parent.mkdir(parents=True)
-    main.write_text(call("m", {"input_tokens": 1000}) + "\n")
+    main.write_text(call("m", {"input_tokens": 1000}, "tool_use", 9, "Agent") + "\n")
     agents = tmp_path / "projects" / "p" / "s" / "subagents"
     agents.mkdir(parents=True)
+    # waits 8 minutes for a build: nothing written meanwhile, but it is working
     busy = agents / "agent-a.jsonl"
-    busy.write_text(call("a", {"input_tokens": 10, "cache_read_input_tokens": 82_000}) + "\n")
+    busy.write_text(call("a", {"input_tokens": 10, "cache_read_input_tokens": 82_000},
+                         "tool_use", 8, "Bash") + "\n")
     (agents / "agent-a.meta.json").write_text('{"agentType": "wykonawca"}')
-    idle = agents / "agent-b.jsonl"
-    idle.write_text(call("b", {"input_tokens": 5}) + "\n")
-    os.utime(busy, (NOW - 5, NOW - 5))
-    os.utime(idle, (NOW - 600, NOW - 600))
+    done = agents / "agent-b.jsonl"
+    done.write_text(call("b", {"input_tokens": 5}, "end_turn", 1) + "\n")
+    killed = agents / "agent-c.jsonl"
+    killed.write_text(call("c", {"input_tokens": 5}, "tool_use", 120, "Bash") + "\n")
+    os.utime(busy, (NOW - 480, NOW - 480))
+    os.utime(killed, (NOW - 7200, NOW - 7200))
     payload = _payload(transcript_path=str(main), rate_limits={
         "five_hour": {"used_percentage": 50.0, "resets_at": NOW + 3600}})
     line = _render(tmp_path, payload)
-    assert line.endswith("wykonawca: ctx 82k · 5h ~44.5%")  # 50 % x 8_210 / 9_215 wt
-    assert "agent:" not in line  # the idle one is not shown
+    # 50 % x 8_210 / 9_220 wt (main 1000, busy 8_210, done 5, killed 5)
+    assert line.endswith("wykonawca: Bash 8m · ctx 82k · 5h ~44.5%")
+    assert "agent:" not in line and "agent " not in line  # finished and stale ones are hidden

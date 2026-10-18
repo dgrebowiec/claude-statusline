@@ -14,10 +14,12 @@ Haiku 5.5 | [##------------------] 12% (118k/1.0M) | cache 1h: until 16:30:26 | 
   prompt cache by the last API call, e.g. `cache read 118k, write 4k`.
 - **Plan limits:** 5-hour and 7-day usage with time until reset, from Claude Code's own data.
 - **Session share:** estimate of how much of each limit this session used.
-- **Working subagents (`agents` field):** subagents of this session active in the last 30 s,
-  with the context of their last call and their share of the 5-hour limit, e.g.
-  `wykonawca: ctx 82k · 5h ~4.8%`. Claude Code always sends the main thread's data, even when
-  you view a subagent, so this field is how its status shows up.
+- **Working subagents (`agents` field):** subagents of this session that have not finished,
+  with the tool they wait for (after a minute), the context of their last call and their share
+  of the 5-hour limit, e.g. `wykonawca: Bash 8m · ctx 130k · 5h ~4.8%`. A subagent counts as
+  finished when its last reply ends its turn; one cut off without that is dropped after an hour
+  without changes. Claude Code always sends the main thread's data, even when you view a
+  subagent, so this field is how its status shows up.
 
 It uses 0 tokens: it only reads local data and never calls the model.
 
