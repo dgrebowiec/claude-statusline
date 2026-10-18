@@ -149,6 +149,7 @@ class AgentStatus(NamedTuple):
     context: Optional[int]   # context size of the last call
     tool: Optional[str]      # tool it waits for, when the last reply asked for one
     since: Optional[float]   # Unix time of that request
+    started: Optional[float] # Unix time of its first record
 
 
 def _agent_status(transcript: str) -> Optional[AgentStatus]:
@@ -187,7 +188,22 @@ def _agent_status(transcript: str) -> Optional[AgentStatus]:
                     except (KeyError, ValueError, AttributeError):
                         since = None
             break
-    return AgentStatus(transcript, _agent_type(transcript), context, tool, since)
+    return AgentStatus(transcript, _agent_type(transcript), context, tool, since,
+                       _first_time(transcript))
+
+
+def _first_time(transcript: str) -> Optional[float]:
+    """Time of the first record that has one: when the subagent started."""
+    try:
+        with open(transcript, encoding="utf-8", errors="replace") as fh:
+            for _, line in zip(range(20), fh):
+                try:
+                    return parse_time(json.loads(line)["timestamp"]).timestamp()
+                except (ValueError, KeyError, TypeError, AttributeError):
+                    continue
+    except OSError:
+        pass
+    return None
 
 
 @dataclass
@@ -355,8 +371,10 @@ def _agents(f: Frame) -> Optional[str]:
     window = (f.payload.get("rate_limits") or {}).get("five_hour") or {}
     used = window.get("used_percentage")
     parts = []
-    for path, name, context, tool, since in f.sources.agents(f.transcript, f.now):
+    for path, name, context, tool, since, started in f.sources.agents(f.transcript, f.now):
         text = paint(name, "agent", f.on)
+        if started is not None and f.config.level != "minimal":
+            text += " " + _duration(f.now - started)
         if f.config.level == "minimal":
             parts.append(text + (f" {fmt_tokens(context)}" if context is not None else ""))
             continue
@@ -439,7 +457,8 @@ class DemoSources(Sources):
         pass
 
     def agents(self, transcript, now):
-        return [AgentStatus("demo/subagents/a.jsonl", "explorer", 82_000, None, None)]
+        return [AgentStatus("demo/subagents/a.jsonl", "explorer", 82_000, "Bash", DEMO_NOW - 262,
+                            DEMO_NOW - 4560)]
 
     def share(self, transcript, hours, used, now, resets_at=None, paths=None):
         if paths is not None:

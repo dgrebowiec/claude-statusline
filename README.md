@@ -15,8 +15,10 @@ Haiku 5.5 | [##------------------] 12% (118k/1.0M) | cache 1h: until 16:30:26 | 
 - **Plan limits:** 5-hour and 7-day usage with time until reset, from Claude Code's own data.
 - **Session share:** estimate of how much of each limit this session used.
 - **Working subagents (`agents` field):** subagents of this session that have not finished,
-  with the tool they wait for and for how long (after 10 s), the context of their last call and their share
-  of the 5-hour limit, e.g. `wykonawca: Bash 8m05s · ctx 130k · 5h ~4.8%`. A subagent counts as
+  with how long they have been working, the tool they wait for and for how long (after 10 s),
+  the context of their last call and their share of the 5-hour limit, e.g.
+  `wykonawca 1h16m: Bash 8m05s · ctx 130k · 5h ~4.8%`. Shares, like the session's, are points
+  of the whole limit: at `5h: 50%`, `~4.8%` means 4.8 of those 50 points. A subagent counts as
   finished when its last reply ends its turn; one cut off without that is dropped after an hour
   without changes. Claude Code always sends the main thread's data, even when you view a
   subagent, so this field is how its status shows up.
