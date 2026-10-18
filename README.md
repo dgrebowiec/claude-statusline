@@ -160,6 +160,8 @@ For each window (5 h, 7 d):
 
     session share = used_percent_of_limit * session_weighted_tokens / window_weighted_tokens
 
+Both totals count usage since the window started (`reset time - 5 h` or `- 7 d`), not the last
+5 h or 7 d: usage of the previous window would otherwise inflate the window total.
 Only local transcripts in `~/.claude/projects` are counted, including subagents of the session.
 If usage happened on another machine or in the web app, the window total is too small and the
 share is too high. The 5-hour and 7-day window totals are cached for 60 s and 5 min.

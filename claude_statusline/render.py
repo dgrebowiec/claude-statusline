@@ -80,10 +80,10 @@ class Sources:
     def cache_io(self, transcript: str) -> Optional[Tuple[int, int]]:
         return last_cache_io(transcript)
 
-    def share(self, transcript: str, hours: int, used: float,
-              now: float) -> Optional[Tuple[float, float, float]]:
+    def share(self, transcript: str, hours: int, used: float, now: float,
+              resets_at: Optional[float] = None) -> Optional[Tuple[float, float, float]]:
         return share_numbers(transcript, hours, used, str(self.projects_dir),
-                             self.cache_dir, now)
+                             self.cache_dir, now, resets_at)
 
 
 @dataclass
@@ -215,10 +215,12 @@ def _share(f: Frame) -> Optional[str]:
         return None
     parts = []
     for name, (key, hours) in LIMITS.items():
-        used = ((f.payload.get("rate_limits") or {}).get(key) or {}).get("used_percentage")
+        window = (f.payload.get("rate_limits") or {}).get(key) or {}
+        used = window.get("used_percentage")
         if used is None:
             continue
-        numbers = f.sources.share(f.transcript, hours, float(used), f.now)
+        numbers = f.sources.share(f.transcript, hours, float(used), f.now,
+                                  window.get("resets_at"))
         if numbers is None:
             continue
         share, session, window = numbers
@@ -291,7 +293,7 @@ class DemoSources(Sources):
     def cache_io(self, transcript: str) -> Optional[Tuple[int, int]]:
         return 118_432, 4_120
 
-    def share(self, transcript, hours, used, now):
+    def share(self, transcript, hours, used, now, resets_at=None):
         if hours == 5:
             return 23.2, 1_180_000, 5_100_000
         return 0.6, 1_180_000, 196_000_000

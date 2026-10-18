@@ -101,6 +101,24 @@ def test_session_share_uses_session_over_window(tmp_path):
     assert share == pytest.approx(70 * 800 / 1800)
 
 
+def test_session_share_window_starts_at_reset_minus_length(tmp_path):
+    projects = tmp_path / "projects"
+    main = projects / "p" / "main.jsonl"
+    _write(main, [_record(NOW - datetime.timedelta(minutes=5), "claude-opus-5",
+                          {"input_tokens": 1000}, "a")])
+    # 4 h ago: inside the last 5 h, but before the window that resets in 3 h started (2 h ago)
+    other = projects / "q" / "other.jsonl"
+    _write(other, [_record(NOW - datetime.timedelta(hours=4), "claude-opus-5",
+                           {"input_tokens": 3000}, "b")])
+    resets_at = NOW.timestamp() + 3 * 3600
+    share = session_share(str(main), 5, 40.0, str(projects), tmp_path / "cache",
+                          NOW.timestamp(), resets_at)
+    assert share == pytest.approx(40.0)
+    share = session_share(str(main), 5, 40.0, str(projects), tmp_path / "cache2",
+                          NOW.timestamp())
+    assert share == pytest.approx(10.0)
+
+
 def test_session_share_none_when_window_empty(tmp_path):
     main = tmp_path / "p" / "main.jsonl"
     _write(main, [])
