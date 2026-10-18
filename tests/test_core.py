@@ -38,7 +38,7 @@ def test_sonnet_input_is_weighted_by_model_price_once():
 
 
 def test_haiku_output_and_cache_types():
-    assert weighted({"output_tokens": 1000}, "claude-haiku-5-5") == pytest.approx(1000)
+    assert weighted({"output_tokens": 1000}, "claude-haiku-5-5") == pytest.approx(100)  # 0.50 / 5
     assert weighted({"cache_read_input_tokens": 1000}, "claude-opus-5") == pytest.approx(100)
     usage = {"cache_creation": {"ephemeral_1h_input_tokens": 1000}}
     assert weighted(usage, "claude-opus-5") == pytest.approx(2000)
@@ -214,3 +214,10 @@ def test_session_share_uses_readings(tmp_path):
     share, mine, window = share_numbers(str(main), 5, 40.0, str(projects), tmp_path / "cache",
                                         NOW.timestamp(), resets_at, samples=samples)
     assert (share, mine, window) == (pytest.approx(30.0), 1000, 2000)
+
+
+def test_prices_match_claude_token_report():
+    # Sonnet 5.5 cache read 0.10 / 5; Haiku 5.5 dearer above 100k prompt tokens
+    assert weighted({"cache_read_input_tokens": 1000}, "claude-sonnet-5-5") == pytest.approx(20)
+    assert weighted({"input_tokens": 1000}, "claude-haiku-5-5") == pytest.approx(20)
+    assert weighted({"input_tokens": 200_000}, "claude-haiku-5-5") == pytest.approx(20_000)

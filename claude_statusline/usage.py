@@ -15,7 +15,7 @@ from .pricing import weighted
 from .samples import Samples
 from .transcript import usage_record
 
-INDEX_VERSION = 1  # bump when the weights change: the index stores weighted tokens
+INDEX_VERSION = 2  # bump when the weights change: the index stores weighted tokens
 MAX_HOURS = 168    # the longest window; older files are dropped from the index
 
 def window_start(hours: int, now: float, resets_at: Optional[float] = None) -> float:
