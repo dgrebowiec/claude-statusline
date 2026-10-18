@@ -41,7 +41,7 @@ BAR_WIDTH = 20
 # A subagent is working until its last reply ends its turn. One cut off without that (killed,
 # Claude Code closed) is dropped once its transcript has not changed for this long.
 STALE_SECONDS = 3600
-TOOL_WAIT_SHOWN = 60  # seconds of waiting for a tool before the line shows it
+TOOL_WAIT_SHOWN = 10  # seconds of waiting for a tool before the line shows it
 LIMITS = {"5h": ("five_hour", 5), "7d": ("seven_day", 168)}  # field -> (payload key, hours)
 
 
@@ -338,6 +338,16 @@ def _share(f: Frame) -> Optional[str]:
     return paint(prefix + " · ".join(parts), "share", f.on)
 
 
+def _duration(seconds: float) -> str:
+    """45s, 8m05s, 1h02m: with seconds, so each timed refresh visibly moves it."""
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m{seconds % 60:02d}s"
+    return f"{seconds // 3600}h{seconds % 3600 // 60:02d}m"
+
+
 def _agents(f: Frame) -> Optional[str]:
     """Subagents working right now: type, context of the last call, share of the 5 h limit."""
     if not f.transcript:
@@ -352,7 +362,7 @@ def _agents(f: Frame) -> Optional[str]:
             continue
         details = []
         if tool and since is not None and f.now - since >= TOOL_WAIT_SHOWN:
-            details.append(f"{tool} {int(f.now - since) // 60}m")
+            details.append(f"{tool} {_duration(f.now - since)}")
         if context is not None:
             details.append(f"ctx {fmt_tokens(context)}")
         if used is not None:
