@@ -70,6 +70,13 @@ class Samples:
         except OSError:
             pass
 
+    def latest(self, hours: int, now: float) -> Optional[Tuple[float, float]]:
+        """(used %, resets_at) of the last reading of a window that has not reset yet."""
+        for _, used, resets_at in reversed(self.readings.get(hours, [])):
+            if resets_at > now:
+                return used, resets_at
+        return None
+
     def window(self, hours: int, resets_at: float) -> List[Tuple[float, float]]:
         """(time, used %) readings of the window that resets at resets_at, rising."""
         points: List[Tuple[float, float]] = []

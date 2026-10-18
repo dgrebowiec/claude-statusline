@@ -269,9 +269,41 @@ def test_render_shows_working_subagents(tmp_path):
         "five_hour": {"used_percentage": 50.0, "resets_at": NOW + 3600}})
     line = _render(tmp_path, payload)
     # 50 % x 8_210 / 9_220 wt (main 1000, busy 8_210, done 5, killed 5)
-    assert line.endswith("wykonawca 8m00s: 5h ~44.5%")
+    assert line.endswith("wykonawca: 5h ~44.5%")
     assert "agent:" not in line and "agent " not in line  # finished and stale ones are hidden
 
-def test_duration_shows_seconds():
-    from claude_statusline.render import _duration
-    assert [_duration(s) for s in (45, 485, 3725)] == ["45s", "8m05s", "1h02m"]
+def test_install_sets_subagent_line_but_keeps_a_foreign_one(tmp_path):
+    path = tmp_path / "settings.json"
+    install(path, command="/x/claude-statusline")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["subagentStatusLine"]["command"] == "/x/claude-statusline subagent"
+    assert uninstall(path) is True
+    assert "subagentStatusLine" not in json.loads(path.read_text(encoding="utf-8"))
+    path.write_text(json.dumps({"subagentStatusLine": {"type": "command", "command": "other"}}),
+                    encoding="utf-8")
+    install(path, command="/x/claude-statusline")
+    assert json.loads(path.read_text(encoding="utf-8"))["subagentStatusLine"]["command"] == "other"
+
+
+def test_subagent_lines_give_each_task_its_share(tmp_path):
+    from claude_statusline.samples import Samples
+    from claude_statusline.subagent import subagent_lines
+    stamp = datetime.datetime.fromtimestamp(NOW - 60, datetime.timezone.utc)
+
+    def call(key, tokens):
+        return json.dumps({"type": "assistant",
+                           "timestamp": stamp.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                           "message": {"id": key, "model": "claude-opus-5",
+                                       "usage": {"input_tokens": tokens}}}) + "\n"
+
+    main = tmp_path / "projects" / "p" / "s.jsonl"
+    main.parent.mkdir(parents=True)
+    main.write_text(call("m", 3000))
+    agents = tmp_path / "projects" / "p" / "s" / "subagents"
+    agents.mkdir(parents=True)
+    (agents / "agent-abc.jsonl").write_text(call("a", 1000))
+    Samples(tmp_path / "cache", NOW).observe(5, 40.0, NOW + 3600, NOW)
+    payload = {"transcript_path": str(main),
+               "tasks": [{"id": "abc", "status": "running"}, {"id": "gone"}]}
+    lines = subagent_lines(payload, tmp_path / "projects", tmp_path / "cache", NOW)
+    assert [json.loads(line) for line in lines] == [{"id": "abc", "content": "5h ~10.0%"}]

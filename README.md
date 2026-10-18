@@ -15,12 +15,13 @@ Haiku 5.5 | [##------------------] 12% (118k/1.0M) | cache 1h: until 16:30:26 | 
 - **Plan limits:** 5-hour and 7-day usage with time until reset, from Claude Code's own data.
 - **Session share:** estimate of how much of each limit this session used.
 - **Working subagents (`agents` field):** subagents of this session that have not finished,
-  with how long they have been working and their share of the 5-hour limit so far, e.g.
-  `wykonawca 1h16m: 5h ~20.7%`. Shares, like the session's, are points of the whole limit:
+  with their share of the 5-hour limit so far, e.g. `wykonawca: 5h ~20.7%`. Shares, like the session's, are points of the whole limit:
   at `5h: 50%`, `~20.7%` means 20.7 of those 50 points. A subagent counts as finished when its
   last reply ends its turn; one cut off without that is dropped after an hour without changes.
   Claude Code always sends the main thread's data, even when you view a subagent, so this
   field is how its status shows up.
+- **Agent panel:** the same share next to each subagent in Claude Code's own list of agents
+  (below the prompt), through Claude Code's `subagentStatusLine` setting.
 
 It uses 0 tokens: it only reads local data and never calls the model.
 
@@ -75,6 +76,14 @@ Detail levels:
 - `detailed`: adds tokens left in the context, the cache TTL, weekday of the reset, and the
   session's weighted tokens next to its share. The `cacheio` field shows exact token counts.
 
+### Agent panel
+
+`install` also sets `subagentStatusLine` to `claude-statusline subagent` (unless it already points
+to another tool). Claude Code runs it every 5 s while subagents are listed below the prompt and
+shows `5h ~20.7%` next to each one: its share of the 5-hour limit so far, in points of the
+whole limit. That command gets no limit data from Claude Code, so it uses the last reading the
+status line logged; it shows nothing until the status line has run once in the current window.
+
 ### Refresh interval
 
 Claude Code re-runs the status line after its own updates (a response of the main thread and
@@ -89,7 +98,7 @@ What a timed refresh updates while a subagent works:
 |---|---|---|
 | `5h`, `7d` | yes | Claude Code takes them from the last API response, subagent calls included |
 | `share` | yes | it reads the subagent transcripts from disk |
-| `agents` | yes | run time and share of each working subagent |
+| `agents` | yes | share of each working subagent |
 | `context`, `cache`, `cacheio` | no | they describe the main thread only |
 
 Each run also logs the current limit reading (see
@@ -119,7 +128,8 @@ claude-statusline install
 ```
 
 `install` sets `statusLine` in `~/.claude/settings.json` (with a 10 s
-[refresh interval](#refresh-interval), or the one you already had) and keeps a backup of the file.
+[refresh interval](#refresh-interval), or the one you already had) and `subagentStatusLine` for
+the [agent panel](#agent-panel), and keeps a backup of the file.
 Restart Claude Code or send a message to see it.
 
 Try it once without installing: `uvx --from git+https://github.com/dgrebowiec/claude-statusline claude-statusline preview`

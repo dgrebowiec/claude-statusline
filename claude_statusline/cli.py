@@ -4,6 +4,7 @@
     claude-statusline configure       interactive editor with a live preview
     claude-statusline config ...      set options directly (see --help)
     claude-statusline preview         print a sample line with the current settings
+    claude-statusline subagent        lines for Claude Code's subagentStatusLine (JSON on stdin)
     claude-statusline install         set statusLine in ~/.claude/settings.json
     claude-statusline uninstall       remove that statusLine entry again
 """
@@ -16,7 +17,8 @@ from . import __version__
 from . import config as config_module
 from .config import FIELDS, LEVELS, Config
 from .configure import main as run_configure
-from .render import preview, render
+from .render import DEFAULT_CACHE_DIR, DEFAULT_PROJECTS_DIR, preview, render
+from .subagent import subagent_lines
 from .settings import (MIN_REFRESH, default_settings_path, get_refresh, install, set_refresh,
                        uninstall)
 
@@ -50,7 +52,10 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("configure", help="interactive editor with a live preview")
     sub.add_parser("preview", help="print a sample line with the current settings")
-    sub.add_parser("install", help="set statusLine in settings.json (keeps a backup)")
+    sub.add_parser("subagent", help="share of the 5 h limit per subagent, for "
+                                    "subagentStatusLine (JSON on stdin)")
+    sub.add_parser("install", help="set statusLine and subagentStatusLine in settings.json "
+                                   "(keeps a backup)")
     sub.add_parser("uninstall", help="remove the statusLine entry if it is ours")
 
     cfg = sub.add_parser("config", help="change options without the editor")
@@ -111,13 +116,17 @@ def _config_command(args: argparse.Namespace) -> None:
         print(f"refresh: every {refresh} s" if refresh else "refresh: only on Claude Code's updates")
 
 
-def _render_stdin() -> str:
+def _read_stdin() -> Dict[str, Any]:
     raw = sys.stdin.read()
     try:
-        payload: Dict[str, Any] = json.loads(raw) if raw.strip() else {}
+        payload = json.loads(raw) if raw.strip() else {}
     except ValueError:
         payload = {}
-    return render(payload)
+    return payload if isinstance(payload, dict) else {}
+
+
+def _render_stdin() -> str:
+    return render(_read_stdin())
 
 
 def main(argv: Optional[List[str]] = None) -> None:
@@ -127,6 +136,9 @@ def main(argv: Optional[List[str]] = None) -> None:
         print(_render_stdin())
     elif args.command == "configure":
         run_configure()
+    elif args.command == "subagent":
+        for line in subagent_lines(_read_stdin(), DEFAULT_PROJECTS_DIR, DEFAULT_CACHE_DIR):
+            print(line)
     elif args.command == "preview":
         print(preview(config_module.load()))
     elif args.command == "config":

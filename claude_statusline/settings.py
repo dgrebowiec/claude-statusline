@@ -58,8 +58,11 @@ def install(path: Path, command: Optional[str] = None) -> Optional[Path]:
     backup = _backup(path)
     old = data.get("statusLine")
     refresh = old.get("refreshInterval") if isinstance(old, dict) else None
-    data["statusLine"] = {"type": "command", "command": command or default_command(),
+    command = command or default_command()
+    data["statusLine"] = {"type": "command", "command": command,
                           "refreshInterval": refresh or DEFAULT_REFRESH}
+    if "subagentStatusLine" not in data or _is_ours(data["subagentStatusLine"]):
+        data["subagentStatusLine"] = {"type": "command", "command": f"{command} subagent"}
     _save(path, data)
     return backup
 
@@ -95,13 +98,18 @@ def set_refresh(path: Path, seconds: Optional[int]) -> None:
 
 
 def uninstall(path: Path) -> bool:
-    """Removes statusLine only when it points to this tool. Returns True if removed."""
+    """Removes statusLine and subagentStatusLine where they point to this tool.
+
+    Returns True if anything was removed.
+    """
     if not path.exists():
         return False
     data = _load(path)
-    if not _is_ours(data.get("statusLine")):
+    ours = [key for key in ("statusLine", "subagentStatusLine") if _is_ours(data.get(key))]
+    if not ours:
         return False
     _backup(path)
-    del data["statusLine"]
+    for key in ours:
+        del data[key]
     _save(path, data)
     return True

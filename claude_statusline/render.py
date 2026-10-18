@@ -11,7 +11,7 @@ from . import config as config_module
 from .cache import cache_status, last_cache_io
 from .config import Config
 from .samples import Samples
-from .transcript import parse_time, tail_lines
+from .transcript import tail_lines
 from .usage import load_index, share_numbers
 
 DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
@@ -144,8 +144,7 @@ def _agent_type(transcript: str) -> str:
 
 class AgentStatus(NamedTuple):
     path: str
-    name: str                 # agent type from <transcript>.meta.json
-    started: Optional[float]  # Unix time of its first record
+    name: str  # agent type from <transcript>.meta.json
 
 
 def _agent_status(transcript: str) -> Optional[AgentStatus]:
@@ -169,21 +168,7 @@ def _agent_status(transcript: str) -> Optional[AgentStatus]:
             if msg.get("stop_reason") == "end_turn":
                 return None
             break
-    return AgentStatus(transcript, _agent_type(transcript), _first_time(transcript))
-
-
-def _first_time(transcript: str) -> Optional[float]:
-    """Time of the first record that has one: when the subagent started."""
-    try:
-        with open(transcript, encoding="utf-8", errors="replace") as fh:
-            for _, line in zip(range(20), fh):
-                try:
-                    return parse_time(json.loads(line)["timestamp"]).timestamp()
-                except (ValueError, KeyError, TypeError, AttributeError):
-                    continue
-    except OSError:
-        pass
-    return None
+    return AgentStatus(transcript, _agent_type(transcript))
 
 
 @dataclass
@@ -334,27 +319,15 @@ def _share(f: Frame) -> Optional[str]:
     return paint(prefix + " · ".join(parts), "share", f.on)
 
 
-def _duration(seconds: float) -> str:
-    """45s, 8m05s, 1h02m."""
-    seconds = int(seconds)
-    if seconds < 60:
-        return f"{seconds}s"
-    if seconds < 3600:
-        return f"{seconds // 60}m{seconds % 60:02d}s"
-    return f"{seconds // 3600}h{seconds % 3600 // 60:02d}m"
-
-
 def _agents(f: Frame) -> Optional[str]:
-    """Subagents working right now: how long, and their share of the 5 h limit so far."""
+    """Subagents working right now and their share of the 5 h limit so far."""
     if not f.transcript:
         return None
     window = (f.payload.get("rate_limits") or {}).get("five_hour") or {}
     used = window.get("used_percentage")
     parts = []
-    for path, name, started in f.sources.agents(f.transcript, f.now):
+    for path, name in f.sources.agents(f.transcript, f.now):
         text = paint(name, "agent", f.on)
-        if started is not None and f.config.level != "minimal":
-            text += " " + _duration(f.now - started)
         numbers = None
         if used is not None:
             numbers = f.sources.share(f.transcript, 5, float(used), f.now,
@@ -436,7 +409,7 @@ class DemoSources(Sources):
         pass
 
     def agents(self, transcript, now):
-        return [AgentStatus("demo/subagents/a.jsonl", "explorer", DEMO_NOW - 4560)]
+        return [AgentStatus("demo/subagents/a.jsonl", "explorer")]
 
     def share(self, transcript, hours, used, now, resets_at=None, paths=None):
         if paths is not None:
