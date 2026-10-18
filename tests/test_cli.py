@@ -267,7 +267,8 @@ def test_render_shows_working_subagents(tmp_path):
     os.utime(killed, (NOW - 7200, NOW - 7200))
     payload = _payload(transcript_path=str(main), rate_limits={
         "five_hour": {"used_percentage": 50.0, "resets_at": NOW + 3600}})
-    line = _render(tmp_path, payload)
+    line = render(payload, now=NOW, projects_dir=tmp_path / "projects",
+                  cache_dir=tmp_path / "cache", config=Config(fields=["share", "agents"]))
     # 50 % x 8_210 / 9_220 wt (main 1000, busy 8_210, done 5, killed 5)
     assert line.endswith("wykonawca: 5h ~44.5%")
     assert "agent:" not in line and "agent " not in line  # finished and stale ones are hidden
@@ -303,7 +304,21 @@ def test_subagent_lines_give_each_task_its_share(tmp_path):
     agents.mkdir(parents=True)
     (agents / "agent-abc.jsonl").write_text(call("a", 1000))
     Samples(tmp_path / "cache", NOW).observe(5, 40.0, NOW + 3600, NOW)
-    payload = {"transcript_path": str(main),
-               "tasks": [{"id": "abc", "status": "running"}, {"id": "gone"}]}
+    payload = {"transcript_path": str(main), "columns": 60, "tasks": [
+        {"id": "abc", "status": "running", "agentType": "wykonawca", "label": "Kompiluję",
+         "startTime": (NOW - 375) * 1000, "tokenCount": 59_300},
+        {"id": "gone", "status": "running"},
+        {"id": "old", "status": "completed"}]}
     lines = subagent_lines(payload, tmp_path / "projects", tmp_path / "cache", NOW)
-    assert [json.loads(line) for line in lines] == [{"id": "abc", "content": "5h ~10.0%"}]
+    rows = [json.loads(line) for line in lines]
+    assert [r["id"] for r in rows] == ["abc"]
+    content = rows[0]["content"]
+    assert len(content) == 60
+    assert content.startswith("wykonawca  Kompiluję ")
+    assert content.endswith("6m 15s · ↓ 59.3k tokens · 5h ~10.0%")
+
+
+def test_subagent_row_cuts_the_description_to_fit():
+    from claude_statusline.subagent import row
+    line = row("x", 3, "a long description", "1s · 5h ~1.0%", 30)
+    assert len(line) == 30 and line.startswith("x    a long") and "…" in line

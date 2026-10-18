@@ -18,7 +18,7 @@ FIELD_DESCRIPTIONS = {
     "agents": "subagents working now: context and share of the 5-hour limit",
 }
 LEVELS = ("minimal", "normal", "detailed")
-DEFAULT_FIELDS = ["model", "effort", "context", "cache", "5h", "7d", "share", "agents"]
+DEFAULT_FIELDS = ["model", "effort", "context", "cache", "5h", "7d", "share"]
 DEFAULT_SEPARATOR = " | "
 
 

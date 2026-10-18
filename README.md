@@ -14,14 +14,14 @@ Haiku 5.5 | [##------------------] 12% (118k/1.0M) | cache 1h: until 16:30:26 | 
   prompt cache by the last API call, e.g. `cache read 118k, write 4k`.
 - **Plan limits:** 5-hour and 7-day usage with time until reset, from Claude Code's own data.
 - **Session share:** estimate of how much of each limit this session used.
-- **Working subagents (`agents` field):** subagents of this session that have not finished,
+- **Working subagents (optional `agents` field):** subagents of this session that have not finished,
   with their share of the 5-hour limit so far, e.g. `wykonawca: 5h ~20.7%`. Shares, like the session's, are points of the whole limit:
   at `5h: 50%`, `~20.7%` means 20.7 of those 50 points. A subagent counts as finished when its
   last reply ends its turn; one cut off without that is dropped after an hour without changes.
-  Claude Code always sends the main thread's data, even when you view a subagent, so this
-  field is how its status shows up.
-- **Agent panel:** the same share next to each subagent in Claude Code's own list of agents
-  (below the prompt), through Claude Code's `subagentStatusLine` setting.
+  Claude Code always sends the main thread's data, even when you view a subagent. Off by
+  default: the agent panel shows the same share.
+- **Agent panel:** each running subagent's share of the 5-hour limit at the end of its row in
+  Claude Code's own list of agents (below the prompt), through the `subagentStatusLine` setting.
 
 It uses 0 tokens: it only reads local data and never calls the model.
 
@@ -66,8 +66,8 @@ claude-statusline preview             # print a sample line with the current set
 
 Settings are stored in `~/.claude/claude-statusline.json` (override with the
 `CLAUDE_STATUSLINE_CONFIG` environment variable). Fields: `model`, `effort`, `context`, `cache`,
-`5h`, `7d`, `share`, `cacheio` (off by default; turn it on with `claude-statusline configure`
-or `--fields`), `agents`. The order in `fields` is the order on the line.
+`5h`, `7d`, `share`, `cacheio` and `agents` (both off by default; turn them on with
+`claude-statusline configure` or `--fields`). The order in `fields` is the order on the line.
 
 Detail levels:
 
@@ -80,8 +80,16 @@ Detail levels:
 
 `install` also sets `subagentStatusLine` to `claude-statusline subagent` (unless it already points
 to another tool). Claude Code runs it every 5 s while subagents are listed below the prompt and
-shows `5h ~20.7%` next to each one: its share of the 5-hour limit so far, in points of the
-whole limit. That command gets no limit data from Claude Code, so it uses the last reading the
+the row of each running subagent ends with its share of the 5-hour limit so far, in points of
+the whole limit:
+
+```
+◯ wykonawca  Compiling main, unit, androidTest sources     6m 13s · ↓ 82.3k tokens · 5h ~20.7%
+```
+
+Claude Code replaces the whole row with what the command returns, so the command redraws the
+name, description, run time and tokens the way Claude Code does and adds the share; finished
+subagents keep Claude Code's own row. That command gets no limit data from Claude Code, so it uses the last reading the
 status line logged; it shows nothing until the status line has run once in the current window.
 
 ### Refresh interval
