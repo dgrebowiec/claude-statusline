@@ -17,7 +17,8 @@ from . import config as config_module
 from .config import FIELDS, LEVELS, Config
 from .configure import main as run_configure
 from .render import preview, render
-from .settings import default_settings_path, install, uninstall
+from .settings import (MIN_REFRESH, default_settings_path, get_refresh, install, set_refresh,
+                       uninstall)
 
 
 def _parse_fields(value: str) -> List[str]:
@@ -27,6 +28,19 @@ def _parse_fields(value: str) -> List[str]:
         raise argparse.ArgumentTypeError(
             f"unknown field(s): {', '.join(unknown)} (choose from {', '.join(FIELDS)})")
     return names
+
+
+def _parse_refresh(value: str) -> int:
+    """Seconds (at least MIN_REFRESH), or 0 / "off" for event-driven updates only."""
+    if value.strip().lower() in ("0", "off"):
+        return 0
+    try:
+        seconds = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number of seconds: {value!r}")
+    if seconds < MIN_REFRESH:
+        raise argparse.ArgumentTypeError(f"at least {MIN_REFRESH} s, or 0/off to turn it off")
+    return seconds
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -46,12 +60,32 @@ def _build_parser() -> argparse.ArgumentParser:
                           f"available: {', '.join(FIELDS)}")
     cfg.add_argument("--separator", help='text between fields, e.g. " · "')
     cfg.add_argument("--colors", choices=["on", "off"])
+    cfg.add_argument("--refresh", type=_parse_refresh, metavar="SECONDS",
+                     help=f"re-run the status line every SECONDS (at least {MIN_REFRESH}) besides "
+                          "Claude Code's own updates, so subagent work shows up while it "
+                          "happens; 0 or off: only on Claude Code's updates. Stored as "
+                          "statusLine.refreshInterval in ~/.claude/settings.json")
     cfg.add_argument("--show", action="store_true", help="print the current settings as JSON")
     cfg.add_argument("--reset", action="store_true", help="restore the defaults")
     return parser
 
 
+def _refresh_command(seconds: int) -> None:
+    path = default_settings_path()
+    try:
+        set_refresh(path, seconds or None)
+    except ValueError as err:
+        sys.exit(f"claude-statusline: {err}")
+    state = f"every {seconds} s" if seconds else "only on Claude Code's updates"
+    print(f"status line refresh: {state} (saved to {path})")
+
+
 def _config_command(args: argparse.Namespace) -> None:
+    if args.refresh is not None:
+        _refresh_command(args.refresh)
+        if not any((args.level, args.fields, args.separator is not None, args.colors,
+                    args.reset, args.show)):
+            return
     path = config_module.config_path()
     if args.reset:
         config = Config()
@@ -73,6 +107,8 @@ def _config_command(args: argparse.Namespace) -> None:
         print(f"saved to {saved}")
     if args.show or not changed:
         print(json.dumps(config.to_dict(), indent=2, ensure_ascii=False))
+        refresh = get_refresh(default_settings_path())
+        print(f"refresh: every {refresh} s" if refresh else "refresh: only on Claude Code's updates")
 
 
 def _render_stdin() -> str:

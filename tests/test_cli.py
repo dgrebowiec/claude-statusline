@@ -7,7 +7,7 @@ import pytest
 from claude_statusline import __version__, cli
 from claude_statusline.config import FIELDS, Config
 from claude_statusline.render import render
-from claude_statusline.settings import install, uninstall
+from claude_statusline.settings import get_refresh, install, set_refresh, uninstall
 
 NOW = datetime.datetime(2026, 10, 17, 12, 0, 0, tzinfo=datetime.timezone.utc).timestamp()
 
@@ -119,6 +119,37 @@ def test_install_keeps_other_keys_and_backs_up(tmp_path):
     assert data["language"] == "polski"
     assert data["statusLine"]["command"] == "claude-statusline"
     assert backup is not None and backup.exists()
+
+
+def test_install_sets_default_refresh_and_keeps_own(tmp_path):
+    path = tmp_path / "settings.json"
+    install(path, command="claude-statusline")
+    assert get_refresh(path) == 10
+    path.write_text(json.dumps({"statusLine": {"type": "command", "command": "x",
+                                               "refreshInterval": 4}}), encoding="utf-8")
+    install(path, command="claude-statusline")
+    assert get_refresh(path) == 4
+
+
+def test_set_refresh_checks_minimum_and_owner(tmp_path):
+    path = tmp_path / "settings.json"
+    install(path, command="claude-statusline")
+    set_refresh(path, 3)
+    assert get_refresh(path) == 3
+    set_refresh(path, None)
+    assert get_refresh(path) is None
+    with pytest.raises(ValueError):
+        set_refresh(path, 2)
+    path.write_text(json.dumps({"statusLine": {"command": "/usr/bin/other"}}), encoding="utf-8")
+    with pytest.raises(ValueError):
+        set_refresh(path, 10)
+
+
+def test_config_refresh_option_validates(capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["config", "--refresh", "2"])
+    assert "at least 3" in capsys.readouterr().err
+    assert cli._parse_refresh("off") == 0 and cli._parse_refresh("5") == 5
 
 
 def test_install_creates_missing_file(tmp_path):

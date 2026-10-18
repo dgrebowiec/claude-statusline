@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 MARKERS = ("claude-statusline", "claude_statusline")  # how we recognise our own entry
+MIN_REFRESH = 3       # seconds; each run takes ~0.1 s, so shorter gains little and costs CPU
+DEFAULT_REFRESH = 10  # seconds; set on install so subagent work shows up while it happens
 
 
 def default_settings_path() -> Path:
@@ -48,12 +50,48 @@ def _is_ours(entry: Any) -> bool:
 
 
 def install(path: Path, command: Optional[str] = None) -> Optional[Path]:
-    """Points statusLine at this tool. Returns the backup path, if a file existed."""
+    """Points statusLine at this tool. Returns the backup path, if a file existed.
+
+    A refresh interval already set is kept; otherwise DEFAULT_REFRESH is set.
+    """
     data = _load(path)
     backup = _backup(path)
-    data["statusLine"] = {"type": "command", "command": command or default_command()}
+    old = data.get("statusLine")
+    refresh = old.get("refreshInterval") if isinstance(old, dict) else None
+    data["statusLine"] = {"type": "command", "command": command or default_command(),
+                          "refreshInterval": refresh or DEFAULT_REFRESH}
     _save(path, data)
     return backup
+
+
+def get_refresh(path: Path) -> Optional[int]:
+    """Seconds between timed re-runs of the status line, or None when it runs on events only."""
+    try:
+        entry = _load(path).get("statusLine")
+    except (OSError, ValueError):
+        return None
+    return entry.get("refreshInterval") if isinstance(entry, dict) else None
+
+
+def set_refresh(path: Path, seconds: Optional[int]) -> None:
+    """Sets refreshInterval of our statusLine entry; None removes it (events only).
+
+    Raises ValueError when statusLine is missing or points to another tool, or seconds is
+    below MIN_REFRESH.
+    """
+    if seconds is not None and seconds < MIN_REFRESH:
+        raise ValueError(f"refresh interval must be at least {MIN_REFRESH} s")
+    data = _load(path)
+    entry = data.get("statusLine")
+    if not _is_ours(entry):
+        raise ValueError("statusLine does not point to claude-statusline; "
+                         "run `claude-statusline install` first")
+    _backup(path)
+    if seconds is None:
+        entry.pop("refreshInterval", None)
+    else:
+        entry["refreshInterval"] = seconds
+    _save(path, data)
 
 
 def uninstall(path: Path) -> bool:

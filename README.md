@@ -54,6 +54,7 @@ Or set options directly:
 ```bash
 claude-statusline config --level minimal --fields model,context,5h,7d --separator " · "
 claude-statusline config --colors off
+claude-statusline config --refresh 5  # re-run every 5 s (at least 3); 0 or off: events only
 claude-statusline config --show       # print current settings
 claude-statusline config --reset      # back to defaults
 claude-statusline preview             # print a sample line with the current settings
@@ -70,6 +71,28 @@ Detail levels:
 - `normal`: the default shown at the top of this page.
 - `detailed`: adds tokens left in the context, the cache TTL, weekday of the reset, and the
   session's weighted tokens next to its share. The `cacheio` field shows exact token counts.
+
+### Refresh interval
+
+Claude Code re-runs the status line after its own updates (a response of the main thread and
+similar events). While a subagent works, the main thread waits, so without a timer the line
+stands still. `install` therefore sets `refreshInterval` to 10 s in the `statusLine` block of
+`~/.claude/settings.json`; change it with `claude-statusline config --refresh SECONDS`
+(at least 3 s; `0` or `off` turns the timer off).
+
+What a timed refresh updates while a subagent works:
+
+| Field | Changes? | Why |
+|---|---|---|
+| `5h`, `7d` | yes | Claude Code takes them from the last API response, subagent calls included |
+| `share` | yes | it reads the subagent transcripts from disk |
+| `agents` | yes | context and share of each working subagent |
+| `context`, `cache`, `cacheio` | no | they describe the main thread only |
+
+Each run also logs the current limit reading (see
+[How the session share is estimated](#how-the-session-share-is-estimated)): the more often it
+runs, the shorter the spans each rise is split over. A run takes about 0.1 s, so 10 s costs
+about 1% of one CPU core per open session.
 
 `cacheio` shows what the last API call did with the prompt cache: `read` is tokens served from
 (a cache hit), `write` is tokens newly stored in it. `minimal` shows `r 118k w 4k`; `detailed`
@@ -92,7 +115,8 @@ pipx install git+https://github.com/dgrebowiec/claude-statusline
 claude-statusline install
 ```
 
-`install` sets `statusLine` in `~/.claude/settings.json` and keeps a backup of the file.
+`install` sets `statusLine` in `~/.claude/settings.json` (with a 10 s
+[refresh interval](#refresh-interval), or the one you already had) and keeps a backup of the file.
 Restart Claude Code or send a message to see it.
 
 Try it once without installing: `uvx --from git+https://github.com/dgrebowiec/claude-statusline claude-statusline preview`
@@ -187,10 +211,8 @@ the previous run, so the totals are always current and a run takes well under 0.
 
 ## Limits
 
-- By default the statusline refreshes only when Claude Code updates it (after responses and
-  similar events), so it stands still while subagents work. Add `"refreshInterval": 10` to the
-  `statusLine` block in `~/.claude/settings.json` to re-run it every 10 s as well; the session
-  share then includes subagent work as it happens.
+- Without a [refresh interval](#refresh-interval) the line updates only on Claude Code's own
+  events, so it stands still while subagents work.
 - Cache expiry is estimated from the last cache write or read in the transcript; the server may
   differ slightly.
 - `cacheio` counts only the last call of the main transcript; subagent calls are not included.
