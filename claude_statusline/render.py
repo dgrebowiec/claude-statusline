@@ -9,7 +9,9 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from . import config as config_module
 from .cache import cache_status, last_cache_io
 from .config import Config
-from .usage import share_numbers
+from .samples import Samples
+from .pricing import display_model
+from .usage import load_index, share_numbers
 
 DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 DEFAULT_CACHE_DIR = Path.home() / ".cache" / "claude-statusline"
@@ -70,6 +72,8 @@ class Sources:
                  cache_dir: Path = DEFAULT_CACHE_DIR):
         self.projects_dir = projects_dir
         self.cache_dir = cache_dir
+        self._index = None
+        self._samples = None
 
     def has_transcript(self, path: str) -> bool:
         return os.path.isfile(path)
@@ -80,10 +84,30 @@ class Sources:
     def cache_io(self, transcript: str) -> Optional[Tuple[int, int]]:
         return last_cache_io(transcript)
 
+    def _load(self, now: float) -> None:
+        """Index and limit readings, once per run for all fields."""
+        if self._index is None:
+            self._index = load_index(str(self.projects_dir), self.cache_dir, now)
+            self._samples = Samples(self.cache_dir, now)
+
     def share(self, transcript: str, hours: int, used: float, now: float,
-              resets_at: Optional[float] = None) -> Optional[Tuple[float, float, float]]:
-        return share_numbers(transcript, hours, used, str(self.projects_dir),
-                             self.cache_dir, now, resets_at)
+              resets_at: Optional[float] = None,
+              paths: Optional[List[str]] = None) -> Optional[Tuple[float, float, float]]:
+        self._load(now)
+        return share_numbers(transcript, hours, used, str(self.projects_dir), self.cache_dir,
+                             now, resets_at, self._index, self._samples, paths)
+
+    def observe_limits(self, payload: Dict[str, Any], now: float) -> None:
+        """Log this run's reading of the limits for every session to split rises by."""
+        limits = payload.get("rate_limits") or {}
+        if not any((limits.get(key) or {}).get("resets_at") for key, _ in LIMITS.values()):
+            return
+        self._load(now)
+        for key, hours in LIMITS.values():
+            window = limits.get(key) or {}
+            used, resets_at = window.get("used_percentage"), window.get("resets_at")
+            if used is not None and resets_at is not None:
+                self._samples.observe(hours, float(used), float(resets_at), now)
 
 
 @dataclass
@@ -234,6 +258,46 @@ def _share(f: Frame) -> Optional[str]:
     return paint(prefix + " · ".join(parts), "share", f.on)
 
 
+def cache_short(status: Tuple[str, float], now: float, on: bool) -> str:
+    """cache 5m until 14:03:22 / cache 5m expired 14:03:22, for rows that are short on room."""
+    tier, expires_at = status
+    clock = datetime.fromtimestamp(expires_at).strftime("%H:%M:%S")
+    head = "cache " + paint(tier, f"tier_{tier}", on) + " "
+    if expires_at <= now:
+        return head + paint(f"expired {clock}", "expired", on)
+    return head + paint(f"until {clock}", f"tier_{tier}", on)
+
+
+def model_text(model_id: Optional[str], effort: Optional[str], on: bool) -> Optional[str]:
+    """Model name and, when known, its effort, painted as in the main status line."""
+    if not model_id:
+        return None
+    text = paint(display_model(model_id), "model", on)
+    if effort:
+        text += " " + paint(f"(effort: {effort})", "effort", on)
+    return text
+
+
+def cache_short(status: Tuple[str, float], now: float, on: bool) -> str:
+    """cache 5m until 14:03:22 / cache 5m expired 14:03:22, for rows that are short on room."""
+    tier, expires_at = status
+    clock = datetime.fromtimestamp(expires_at).strftime("%H:%M:%S")
+    head = "cache " + paint(tier, f"tier_{tier}", on) + " "
+    if expires_at <= now:
+        return head + paint(f"expired {clock}", "expired", on)
+    return head + paint(f"until {clock}", f"tier_{tier}", on)
+
+
+def model_text(model_id: Optional[str], effort: Optional[str], on: bool) -> Optional[str]:
+    """Model name and, when known, its effort, painted as in the main status line."""
+    if not model_id:
+        return None
+    text = paint(display_model(model_id), "model", on)
+    if effort:
+        text += " " + paint(f"(effort: {effort})", "effort", on)
+    return text
+
+
 BUILDERS: Dict[str, Callable[[Frame], Optional[str]]] = {
     "model": _model,
     "effort": _effort,
@@ -251,6 +315,7 @@ def build(payload: Dict[str, Any], now: float, config: Config, sources: Sources)
     transcript = payload.get("transcript_path") or None
     if transcript and not sources.has_transcript(transcript):
         transcript = None
+    sources.observe_limits(payload, now)
     frame = Frame(payload, now, config, sources, transcript, on)
     parts: List[str] = [text for text in (BUILDERS[name](frame) for name in config.fields)
                         if text]
@@ -293,7 +358,12 @@ class DemoSources(Sources):
     def cache_io(self, transcript: str) -> Optional[Tuple[int, int]]:
         return 118_432, 4_120
 
-    def share(self, transcript, hours, used, now, resets_at=None):
+    def observe_limits(self, payload, now):
+        pass
+
+    def share(self, transcript, hours, used, now, resets_at=None, paths=None):
+        if paths is not None:
+            return 4.8, 240_000, 5_100_000
         if hours == 5:
             return 23.2, 1_180_000, 5_100_000
         return 0.6, 1_180_000, 196_000_000

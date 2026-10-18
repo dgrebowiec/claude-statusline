@@ -7,7 +7,7 @@ import pytest
 from claude_statusline import __version__, cli
 from claude_statusline.config import FIELDS, Config
 from claude_statusline.render import render
-from claude_statusline.settings import install, uninstall
+from claude_statusline.settings import get_refresh, install, set_refresh, uninstall
 
 NOW = datetime.datetime(2026, 10, 17, 12, 0, 0, tzinfo=datetime.timezone.utc).timestamp()
 
@@ -121,6 +121,37 @@ def test_install_keeps_other_keys_and_backs_up(tmp_path):
     assert backup is not None and backup.exists()
 
 
+def test_install_sets_default_refresh_and_keeps_own(tmp_path):
+    path = tmp_path / "settings.json"
+    install(path, command="claude-statusline")
+    assert get_refresh(path) == 10
+    path.write_text(json.dumps({"statusLine": {"type": "command", "command": "x",
+                                               "refreshInterval": 4}}), encoding="utf-8")
+    install(path, command="claude-statusline")
+    assert get_refresh(path) == 4
+
+
+def test_set_refresh_checks_minimum_and_owner(tmp_path):
+    path = tmp_path / "settings.json"
+    install(path, command="claude-statusline")
+    set_refresh(path, 3)
+    assert get_refresh(path) == 3
+    set_refresh(path, None)
+    assert get_refresh(path) is None
+    with pytest.raises(ValueError):
+        set_refresh(path, 2)
+    path.write_text(json.dumps({"statusLine": {"command": "/usr/bin/other"}}), encoding="utf-8")
+    with pytest.raises(ValueError):
+        set_refresh(path, 10)
+
+
+def test_config_refresh_option_validates(capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["config", "--refresh", "2"])
+    assert "at least 3" in capsys.readouterr().err
+    assert cli._parse_refresh("off") == 0 and cli._parse_refresh("5") == 5
+
+
 def test_install_creates_missing_file(tmp_path):
     path = tmp_path / "new" / "settings.json"
     assert install(path, command="claude-statusline") is None
@@ -205,3 +236,77 @@ def test_cacheio_none_without_transcript(tmp_path):
 def test_cacheio_is_off_by_default():
     assert "cacheio" not in Config().fields
     assert "cacheio" in FIELDS
+
+
+def test_agent_panel_is_opt_in_and_keeps_a_foreign_one(tmp_path):
+    from claude_statusline.settings import get_agent_panel, set_agent_panel
+    path = tmp_path / "settings.json"
+    install(path, command="/x/claude-statusline")
+    assert get_agent_panel(path) is False  # install leaves the agent panel alone
+    assert set_agent_panel(path, True, command="/x/claude-statusline") is True
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["subagentStatusLine"]["command"] == "/x/claude-statusline subagent"
+    assert set_agent_panel(path, False) is True and get_agent_panel(path) is False
+    assert uninstall(path) is True
+    path.write_text(json.dumps({"subagentStatusLine": {"type": "command", "command": "other"}}),
+                    encoding="utf-8")
+    with pytest.raises(ValueError):
+        set_agent_panel(path, True)
+    assert set_agent_panel(path, False) is False
+    assert json.loads(path.read_text(encoding="utf-8"))["subagentStatusLine"]["command"] == "other"
+
+
+def test_subagent_lines_give_each_task_its_share(tmp_path):
+    from claude_statusline.samples import Samples
+    from claude_statusline.subagent import subagent_lines
+    stamp = datetime.datetime.fromtimestamp(NOW - 60, datetime.timezone.utc)
+
+    def call(key, tokens):
+        return json.dumps({"type": "assistant",
+                           "timestamp": stamp.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                           "message": {"id": key, "model": "claude-opus-5",
+                                       "usage": {"input_tokens": tokens}}}) + "\n"
+
+    main = tmp_path / "projects" / "p" / "s.jsonl"
+    main.parent.mkdir(parents=True)
+    main.write_text(call("m", 3000))
+    agents = tmp_path / "projects" / "p" / "s" / "subagents"
+    agents.mkdir(parents=True)
+    (agents / "agent-abc.jsonl").write_text(call("a", 1000))
+    Samples(tmp_path / "cache", NOW).observe(5, 40.0, NOW + 3600, NOW)
+    payload = {"transcript_path": str(main), "columns": 90, "tasks": [
+        {"id": "abc", "status": "running", "agentType": "wykonawca", "label": "Kompiluję", "effort": "high",
+         "startTime": (NOW - 375) * 1000, "tokenCount": 59_300},
+        {"id": "gone", "status": "running"},
+        {"id": "old", "status": "completed"}]}
+    lines = subagent_lines(payload, tmp_path / "projects", tmp_path / "cache", NOW)
+    rows = [json.loads(line) for line in lines]
+    assert [r["id"] for r in rows] == ["abc"]
+    content = rows[0]["content"]
+    assert len(content) == 90
+    assert content.startswith("wykonawca  Kompiluję ")
+    assert content.endswith("6m 15s · ↓ 59.3k tokens · Opus 5 (effort: high) · 5h ~10.0%")
+
+
+def test_subagent_row_cuts_the_description_to_fit():
+    from claude_statusline.subagent import row
+    line = row("x", 3, "a long description", "1s · 5h ~1.0%", 30)
+    assert len(line) == 30 and line.startswith("x    a long") and "…" in line
+
+
+def test_agent_panel_fields_choose_and_order_the_right_part():
+    from claude_statusline.subagent import right_part
+    args = (NOW, NOW - 60, 2000, "claude-sonnet-5-5", "high", ("5m", NOW + 60), 1.5, False)
+    assert right_part(["share", "model"], *args) == "5h ~1.5% · Sonnet 5.5 (effort: high)"
+    assert right_part(["time", "tokens"], *args) == "1m 0s · ↓ 2.0k tokens"
+
+
+def test_configurator_edits_agent_panel_fields_separately():
+    from claude_statusline.configure import Editor
+    editor = Editor(Config())
+    editor.cursor = len(editor.order)  # first agent panel row
+    editor.toggle()
+    assert "time" not in editor.config.agent_fields and "model" in editor.config.fields
+    editor.move(1)
+    assert editor.agent_order[:2] == ["tokens", "time"] and editor.cursor == len(editor.order) + 1
+    assert any("Agent panel preview" in line for line in editor.screen(120))

@@ -4,6 +4,7 @@
     claude-statusline configure       interactive editor with a live preview
     claude-statusline config ...      set options directly (see --help)
     claude-statusline preview         print a sample line with the current settings
+    claude-statusline subagent        lines for Claude Code's subagentStatusLine (JSON on stdin)
     claude-statusline install         set statusLine in ~/.claude/settings.json
     claude-statusline uninstall       remove that statusLine entry again
 """
@@ -16,8 +17,10 @@ from . import __version__
 from . import config as config_module
 from .config import FIELDS, LEVELS, Config
 from .configure import main as run_configure
-from .render import preview, render
-from .settings import default_settings_path, install, uninstall
+from .render import colours_enabled, DEFAULT_CACHE_DIR, DEFAULT_PROJECTS_DIR, preview, render
+from .subagent import subagent_lines
+from .settings import (MIN_REFRESH, default_settings_path, get_agent_panel, get_refresh, install,
+                       set_agent_panel, set_refresh, uninstall)
 
 
 def _parse_fields(value: str) -> List[str]:
@@ -29,6 +32,19 @@ def _parse_fields(value: str) -> List[str]:
     return names
 
 
+def _parse_refresh(value: str) -> int:
+    """Seconds (at least MIN_REFRESH), or 0 / "off" for event-driven updates only."""
+    if value.strip().lower() in ("0", "off"):
+        return 0
+    try:
+        seconds = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number of seconds: {value!r}")
+    if seconds < MIN_REFRESH:
+        raise argparse.ArgumentTypeError(f"at least {MIN_REFRESH} s, or 0/off to turn it off")
+    return seconds
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="claude-statusline", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -36,6 +52,8 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("configure", help="interactive editor with a live preview")
     sub.add_parser("preview", help="print a sample line with the current settings")
+    sub.add_parser("subagent", help="share of the 5 h limit per subagent, for "
+                                    "subagentStatusLine (JSON on stdin)")
     sub.add_parser("install", help="set statusLine in settings.json (keeps a backup)")
     sub.add_parser("uninstall", help="remove the statusLine entry if it is ours")
 
@@ -46,12 +64,48 @@ def _build_parser() -> argparse.ArgumentParser:
                           f"available: {', '.join(FIELDS)}")
     cfg.add_argument("--separator", help='text between fields, e.g. " · "')
     cfg.add_argument("--colors", choices=["on", "off"])
+    cfg.add_argument("--refresh", type=_parse_refresh, metavar="SECONDS",
+                     help=f"re-run the status line every SECONDS (at least {MIN_REFRESH}) besides "
+                          "Claude Code's own updates, so subagent work shows up while it "
+                          "happens; 0 or off: only on Claude Code's updates. Stored as "
+                          "statusLine.refreshInterval in ~/.claude/settings.json")
+    cfg.add_argument("--agent-panel", choices=["on", "off"],
+                     help="add each running subagent's 5 h share to its row in Claude Code's "
+                          "agent panel (subagentStatusLine). Claude Code then redraws those "
+                          "rows every 5 s instead of every second")
     cfg.add_argument("--show", action="store_true", help="print the current settings as JSON")
     cfg.add_argument("--reset", action="store_true", help="restore the defaults")
     return parser
 
 
+def _refresh_command(seconds: int) -> None:
+    path = default_settings_path()
+    try:
+        set_refresh(path, seconds or None)
+    except ValueError as err:
+        sys.exit(f"claude-statusline: {err}")
+    state = f"every {seconds} s" if seconds else "only on Claude Code's updates"
+    print(f"status line refresh: {state} (saved to {path})")
+
+
+def _agent_panel_command(on: bool) -> None:
+    path = default_settings_path()
+    try:
+        set_agent_panel(path, on)
+    except ValueError as err:
+        sys.exit(f"claude-statusline: {err}")
+    print(f"agent panel: {'on' if on else 'off'} (saved to {path})")
+
+
 def _config_command(args: argparse.Namespace) -> None:
+    if args.refresh is not None:
+        _refresh_command(args.refresh)
+    if args.agent_panel:
+        _agent_panel_command(args.agent_panel == "on")
+    if args.refresh is not None or args.agent_panel:
+        if not any((args.level, args.fields, args.separator is not None, args.colors,
+                    args.reset, args.show)):
+            return
     path = config_module.config_path()
     if args.reset:
         config = Config()
@@ -73,15 +127,22 @@ def _config_command(args: argparse.Namespace) -> None:
         print(f"saved to {saved}")
     if args.show or not changed:
         print(json.dumps(config.to_dict(), indent=2, ensure_ascii=False))
+        refresh = get_refresh(default_settings_path())
+        print(f"refresh: every {refresh} s" if refresh else "refresh: only on Claude Code's updates")
+        print(f"agent panel: {'on' if get_agent_panel(default_settings_path()) else 'off'}")
+
+
+def _read_stdin() -> Dict[str, Any]:
+    raw = sys.stdin.read()
+    try:
+        payload = json.loads(raw) if raw.strip() else {}
+    except ValueError:
+        payload = {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _render_stdin() -> str:
-    raw = sys.stdin.read()
-    try:
-        payload: Dict[str, Any] = json.loads(raw) if raw.strip() else {}
-    except ValueError:
-        payload = {}
-    return render(payload)
+    return render(_read_stdin())
 
 
 def main(argv: Optional[List[str]] = None) -> None:
@@ -91,6 +152,11 @@ def main(argv: Optional[List[str]] = None) -> None:
         print(_render_stdin())
     elif args.command == "configure":
         run_configure()
+    elif args.command == "subagent":
+        settings = config_module.load()
+        for line in subagent_lines(_read_stdin(), DEFAULT_PROJECTS_DIR, DEFAULT_CACHE_DIR,
+                                   colors=colours_enabled(settings), config=settings):
+            print(line)
     elif args.command == "preview":
         print(preview(config_module.load()))
     elif args.command == "config":

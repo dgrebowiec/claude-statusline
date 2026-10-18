@@ -7,7 +7,7 @@ import pytest
 from claude_statusline.cache import cache_status, last_cache_io
 from claude_statusline.pricing import weighted
 from claude_statusline.transcript import tail_lines, usage_record
-from claude_statusline.usage import session_share
+from claude_statusline.usage import load_index, session_share
 
 
 def _record(time: datetime.datetime, model: str, usage: dict, key: str) -> str:
@@ -38,7 +38,7 @@ def test_sonnet_input_is_weighted_by_model_price_once():
 
 
 def test_haiku_output_and_cache_types():
-    assert weighted({"output_tokens": 1000}, "claude-haiku-5-5") == pytest.approx(1000)
+    assert weighted({"output_tokens": 1000}, "claude-haiku-5-5") == pytest.approx(100)  # 0.50 / 5
     assert weighted({"cache_read_input_tokens": 1000}, "claude-opus-5") == pytest.approx(100)
     usage = {"cache_creation": {"ephemeral_1h_input_tokens": 1000}}
     assert weighted(usage, "claude-opus-5") == pytest.approx(2000)
@@ -119,6 +119,27 @@ def test_session_share_window_starts_at_reset_minus_length(tmp_path):
     assert share == pytest.approx(10.0)
 
 
+def test_index_reads_only_appended_lines(tmp_path):
+    projects = tmp_path / "projects"
+    cache = tmp_path / "cache"
+    main = projects / "p" / "main.jsonl"
+    recent = NOW - datetime.timedelta(minutes=5)
+    _write(main, [_record(recent, "claude-opus-5", {"input_tokens": 1000}, "a")])
+    ts = NOW.timestamp()
+    assert len(load_index(str(projects), cache, ts)[str(main)]["calls"]) == 1
+    with open(main, "a", encoding="utf-8") as fh:
+        fh.write(_record(recent, "claude-opus-5", {"input_tokens": 500}, "b") + "\n")
+        fh.write(_record(recent, "claude-opus-5", {"input_tokens": 9}, "c"))  # no newline yet
+    entry = load_index(str(projects), cache, ts)[str(main)]
+    assert sorted(entry["calls"]) == ["a", "b"]
+    with open(main, "a", encoding="utf-8") as fh:
+        fh.write("\n")
+    assert sorted(load_index(str(projects), cache, ts)[str(main)]["calls"]) == ["a", "b", "c"]
+    # a rewritten (shorter) file is read again from the start
+    _write(main, [_record(recent, "claude-opus-5", {"input_tokens": 1}, "z")])
+    assert sorted(load_index(str(projects), cache, ts)[str(main)]["calls"]) == ["z"]
+
+
 def test_session_share_none_when_window_empty(tmp_path):
     main = tmp_path / "p" / "main.jsonl"
     _write(main, [])
@@ -143,3 +164,60 @@ def test_last_cache_io_reads_the_last_call(tmp_path):
 def test_last_cache_io_none_without_api_calls(tmp_path):
     path = _write(tmp_path / "s.jsonl", ['{"type":"user"}'])
     assert last_cache_io(path) is None
+
+
+# --- splitting rises of the limit between readings ---
+
+def test_attributed_share_splits_each_rise_by_its_own_calls():
+    from claude_statusline.usage import attributed_share
+    calls = [(10, 100, True), (20, 100, False),   # 0 -> 10 %: half mine
+             (30, 300, False)]                     # 10 -> 40 %: none mine
+    points = [(0, 0.0), (25, 10.0), (35, 40.0)]
+    assert attributed_share(calls, points) == pytest.approx(5.0)
+    # the plain ratio would say 40 % x 100 / 500 = 8 %
+
+
+def test_attributed_share_splits_rise_without_calls_like_the_span_before():
+    from claude_statusline.usage import attributed_share
+    calls = [(10, 50, True), (12, 50, False)]
+    # 10 -> 25 % came in a span without calls (a late reading): split half and half too
+    assert attributed_share(calls, [(0, 0.0), (20, 10.0), (30, 25.0)]) == 12.5
+
+
+def test_samples_skip_stale_readings_and_start_new_window(tmp_path):
+    from claude_statusline.samples import Samples
+    samples = Samples(tmp_path, 1000)
+    samples.observe(5, 10.0, 5000, 1000)
+    samples.observe(5, 8.0, 5000, 1010)    # stale reading of an idle session
+    samples.observe(5, 12.5, 5001, 1020)   # same window, resets_at a second off
+    assert samples.window(5, 5000) == [(1000, 10.0), (1020, 12.5)]
+    samples.observe(5, 0.3, 23000, 6000)   # next window
+    reread = Samples(tmp_path, 6000)
+    assert reread.window(5, 23000) == [(6000, 0.3)]
+    assert len(reread.window(5, 5000)) == 2
+
+
+def test_session_share_uses_readings(tmp_path):
+    from claude_statusline.samples import Samples
+    from claude_statusline.usage import share_numbers
+    projects = tmp_path / "projects"
+    t0 = NOW - datetime.timedelta(hours=1)
+    main = projects / "p" / "main.jsonl"
+    _write(main, [_record(t0 + datetime.timedelta(minutes=1), "claude-opus-5",
+                          {"input_tokens": 1000}, "a")])
+    _write(projects / "q" / "other.jsonl",
+           [_record(t0 + datetime.timedelta(minutes=30), "claude-opus-5",
+                    {"input_tokens": 1000}, "b")])
+    resets_at = NOW.timestamp() + 3600
+    samples = Samples(tmp_path / "cache", NOW.timestamp())
+    samples.observe(5, 30.0, resets_at, (t0 + datetime.timedelta(minutes=10)).timestamp())
+    share, mine, window = share_numbers(str(main), 5, 40.0, str(projects), tmp_path / "cache",
+                                        NOW.timestamp(), resets_at, samples=samples)
+    assert (share, mine, window) == (pytest.approx(30.0), 1000, 2000)
+
+
+def test_prices_match_claude_token_report():
+    # Sonnet 5.5 cache read 0.10 / 5; Haiku 5.5 dearer above 100k prompt tokens
+    assert weighted({"cache_read_input_tokens": 1000}, "claude-sonnet-5-5") == pytest.approx(20)
+    assert weighted({"input_tokens": 1000}, "claude-haiku-5-5") == pytest.approx(20)
+    assert weighted({"input_tokens": 200_000}, "claude-haiku-5-5") == pytest.approx(20_000)
