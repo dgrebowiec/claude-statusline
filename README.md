@@ -164,12 +164,16 @@ Both totals count usage since the window started (`reset time - 5 h` or `- 7 d`)
 5 h or 7 d: usage of the previous window would otherwise inflate the window total.
 Only local transcripts in `~/.claude/projects` are counted, including subagents of the session.
 If usage happened on another machine or in the web app, the window total is too small and the
-share is too high. The 5-hour and 7-day window totals are cached for 60 s and 5 min.
+share is too high. Calls of the last 7 days are kept in an index
+(`~/.cache/claude-statusline/index.json`); each run reads only lines added to transcripts since
+the previous run, so the totals are always current and a run takes well under 0.1 s.
 
 ## Limits
 
-- The statusline refreshes only when Claude Code updates it (after responses and similar events),
-  not on a timer.
+- By default the statusline refreshes only when Claude Code updates it (after responses and
+  similar events), so it stands still while subagents work. Add `"refreshInterval": 10` to the
+  `statusLine` block in `~/.claude/settings.json` to re-run it every 10 s as well; the session
+  share then includes subagent work as it happens.
 - Cache expiry is estimated from the last cache write or read in the transcript; the server may
   differ slightly.
 - `cacheio` counts only the last call of the main transcript; subagent calls are not included.

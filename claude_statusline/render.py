@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from . import config as config_module
 from .cache import cache_status, last_cache_io
 from .config import Config
-from .usage import share_numbers
+from .usage import load_index, share_numbers
 
 DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 DEFAULT_CACHE_DIR = Path.home() / ".cache" / "claude-statusline"
@@ -70,6 +70,7 @@ class Sources:
                  cache_dir: Path = DEFAULT_CACHE_DIR):
         self.projects_dir = projects_dir
         self.cache_dir = cache_dir
+        self._index = None
 
     def has_transcript(self, path: str) -> bool:
         return os.path.isfile(path)
@@ -82,8 +83,10 @@ class Sources:
 
     def share(self, transcript: str, hours: int, used: float, now: float,
               resets_at: Optional[float] = None) -> Optional[Tuple[float, float, float]]:
+        if self._index is None:  # 5h and 7d share one index update per run
+            self._index = load_index(str(self.projects_dir), self.cache_dir, now)
         return share_numbers(transcript, hours, used, str(self.projects_dir),
-                             self.cache_dir, now, resets_at)
+                             self.cache_dir, now, resets_at, self._index)
 
 
 @dataclass

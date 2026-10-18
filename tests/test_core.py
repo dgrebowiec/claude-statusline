@@ -7,7 +7,7 @@ import pytest
 from claude_statusline.cache import cache_status, last_cache_io
 from claude_statusline.pricing import weighted
 from claude_statusline.transcript import tail_lines, usage_record
-from claude_statusline.usage import session_share
+from claude_statusline.usage import load_index, session_share
 
 
 def _record(time: datetime.datetime, model: str, usage: dict, key: str) -> str:
@@ -117,6 +117,27 @@ def test_session_share_window_starts_at_reset_minus_length(tmp_path):
     share = session_share(str(main), 5, 40.0, str(projects), tmp_path / "cache2",
                           NOW.timestamp())
     assert share == pytest.approx(10.0)
+
+
+def test_index_reads_only_appended_lines(tmp_path):
+    projects = tmp_path / "projects"
+    cache = tmp_path / "cache"
+    main = projects / "p" / "main.jsonl"
+    recent = NOW - datetime.timedelta(minutes=5)
+    _write(main, [_record(recent, "claude-opus-5", {"input_tokens": 1000}, "a")])
+    ts = NOW.timestamp()
+    assert len(load_index(str(projects), cache, ts)[str(main)]["calls"]) == 1
+    with open(main, "a", encoding="utf-8") as fh:
+        fh.write(_record(recent, "claude-opus-5", {"input_tokens": 500}, "b") + "\n")
+        fh.write(_record(recent, "claude-opus-5", {"input_tokens": 9}, "c"))  # no newline yet
+    entry = load_index(str(projects), cache, ts)[str(main)]
+    assert sorted(entry["calls"]) == ["a", "b"]
+    with open(main, "a", encoding="utf-8") as fh:
+        fh.write("\n")
+    assert sorted(load_index(str(projects), cache, ts)[str(main)]["calls"]) == ["a", "b", "c"]
+    # a rewritten (shorter) file is read again from the start
+    _write(main, [_record(recent, "claude-opus-5", {"input_tokens": 1}, "z")])
+    assert sorted(load_index(str(projects), cache, ts)[str(main)]["calls"]) == ["z"]
 
 
 def test_session_share_none_when_window_empty(tmp_path):

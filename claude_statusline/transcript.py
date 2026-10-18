@@ -11,11 +11,16 @@ def parse_time(value: str) -> datetime.datetime:
 
 def tail_lines(path: str, count: int, max_bytes: int = 4_000_000) -> List[str]:
     """The last `count` lines of a file, reading at most `max_bytes` from its end."""
+    chunk = 256_000
     with open(path, "rb") as fh:
-        size = fh.seek(0, os.SEEK_END)
-        start = max(0, size - max_bytes)
-        fh.seek(start)
-        data = fh.read()
+        start = size = fh.seek(0, os.SEEK_END)
+        data = b""
+        # read backwards until there are enough lines, so short tails stay cheap
+        while start > 0 and size - start < max_bytes and data.count(b"\n") <= count:
+            step = min(chunk, start, max_bytes - (size - start))
+            start -= step
+            fh.seek(start)
+            data = fh.read(step) + data
     lines = data.decode("utf-8", errors="replace").splitlines()
     if start > 0 and lines:
         lines = lines[1:]  # the first line may be cut in the middle

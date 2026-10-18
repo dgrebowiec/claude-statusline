@@ -1,35 +1,22 @@
-"""How much of the plan limit this session used: weighted tokens of the session vs. the window."""
-import datetime
-import glob
+"""How much of the plan limit this session used: weighted tokens of the session vs. the window.
+
+Every API call of the last 7 days is kept in an index (cache dir, `index.json`) as
+key -> (time, weighted tokens). Transcripts are append-only, so each run reads only the bytes
+added since the last run; the window and session totals are sums over the index.
+"""
 import json
 import os
 import time
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
 
 from .pricing import weighted
 from .transcript import usage_record
 
-WINDOW_CACHE_TTL = {5: 60, 168: 300}  # seconds; short window is refreshed more often
+INDEX_VERSION = 1  # bump when the weights change: the index stores weighted tokens
+MAX_HOURS = 168    # the longest window; older files are dropped from the index
 
-
-def _collect(paths, since: datetime.datetime, calls: Dict) -> None:
-    """Keep one usage record per message id (the last one wins, as claude-token-report does)."""
-    for path in paths:
-        try:
-            fh = open(path, encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        with fh:
-            for line in fh:
-                rec = usage_record(line)
-                if rec is None or rec["time"] < since or rec["key"] is None:
-                    continue
-                calls[rec["key"]] = (rec["model"], rec["usage"])
-
-
-def _total(calls: Dict) -> float:
-    return sum(weighted(usage, model) for model, usage in calls.values())
+Calls = Dict[str, List[float]]  # message key -> [Unix time, weighted tokens]
 
 
 def window_start(hours: int, now: float, resets_at: Optional[float] = None) -> float:
@@ -43,62 +30,111 @@ def window_start(hours: int, now: float, resets_at: Optional[float] = None) -> f
     return now - hours * 3600
 
 
-def window_total(projects_dir: str, since_ts: float) -> float:
-    since = datetime.datetime.fromtimestamp(since_ts, datetime.timezone.utc)
-    paths = []
-    for path in glob.glob(os.path.join(projects_dir, "**", "*.jsonl"), recursive=True):
+def _recent_transcripts(projects_dir: str, since_ts: float) -> Iterator[Tuple[str, int]]:
+    """(path, size) of every *.jsonl under projects_dir modified since since_ts."""
+    stack = [projects_dir]
+    while stack:
         try:
-            if os.path.getmtime(path) >= since_ts:
-                paths.append(path)
+            entries = list(os.scandir(stack.pop()))
         except OSError:
             continue
-    calls: Dict = {}
-    _collect(paths, since, calls)
-    return _total(calls)
+        for entry in entries:
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    stack.append(entry.path)
+                elif entry.name.endswith(".jsonl"):
+                    st = entry.stat()
+                    if st.st_mtime >= since_ts:
+                        yield entry.path, st.st_size
+            except OSError:
+                continue
 
 
-def cached_window_total(hours: int, projects_dir: str, cache_dir: Path, now: float,
-                        since_ts: float) -> float:
-    cache_file = cache_dir / f"window_{hours}h.json"
+def _read_new(path: str, entry: Dict) -> bool:
+    """Add calls written after entry["offset"] to entry["calls"]; True when anything was read.
+
+    The last record of a message wins, as in claude-token-report. A line still being written
+    (no newline yet) is left for the next run.
+    """
     try:
-        data = json.loads(cache_file.read_text(encoding="utf-8"))
-        if now - data["at"] < WINDOW_CACHE_TTL[hours] and data["since"] == since_ts:
-            return float(data["total"])
-    except (OSError, ValueError, KeyError):
-        pass
-    total = window_total(projects_dir, since_ts)
-    try:
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        cache_file.write_text(json.dumps({"at": now, "since": since_ts, "total": total}),
-                              encoding="utf-8")
+        with open(path, "rb") as fh:
+            fh.seek(entry["offset"])
+            data = fh.read()
     except OSError:
-        pass
-    return total
+        return False
+    end = data.rfind(b"\n") + 1
+    if end == 0:
+        return False
+    calls = entry["calls"]
+    for line in data[:end].decode("utf-8", errors="replace").splitlines():
+        rec = usage_record(line)
+        if rec is None or rec["key"] is None:
+            continue
+        calls[rec["key"]] = [rec["time"].timestamp(), weighted(rec["usage"], rec["model"])]
+    entry["offset"] += end
+    return True
 
 
-def session_total(transcript: str, since_ts: float) -> float:
+def load_index(projects_dir: str, cache_dir: Path, now: float) -> Dict[str, Dict]:
+    """path -> {"offset", "size", "calls"} for transcripts of the last MAX_HOURS, brought up to date."""
+    index_file = cache_dir / "index.json"
+    try:
+        data = json.loads(index_file.read_text(encoding="utf-8"))
+        files = data["files"] if data.get("version") == INDEX_VERSION else {}
+    except (OSError, ValueError, KeyError, TypeError):
+        files = {}
+    fresh: Dict[str, Dict] = {}
+    changed = False
+    for path, size in _recent_transcripts(projects_dir, now - MAX_HOURS * 3600):
+        entry = files.get(path)
+        if entry is None or size < entry["offset"]:  # new, or rewritten from scratch
+            entry = {"offset": 0, "size": -1, "calls": {}}
+        if entry["size"] != size:
+            changed |= _read_new(path, entry)
+            entry["size"] = size
+        fresh[path] = entry
+    if changed or fresh.keys() != files.keys():
+        try:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            tmp = index_file.with_suffix(f".{os.getpid()}.tmp")  # sessions run side by side
+            tmp.write_text(json.dumps({"version": INDEX_VERSION, "files": fresh}),
+                           encoding="utf-8")
+            os.replace(tmp, index_file)
+        except OSError:
+            pass
+    return fresh
+
+
+def _total(entries, since_ts: float) -> float:
+    calls: Calls = {}
+    for entry in entries:
+        calls.update(entry["calls"])
+    return sum(w for t, w in calls.values() if t >= since_ts)
+
+
+def session_paths(transcript: str, index: Dict[str, Dict]) -> List[str]:
     """Main transcript plus its subagent transcripts."""
-    since = datetime.datetime.fromtimestamp(since_ts, datetime.timezone.utc)
-    base = transcript[: -len(".jsonl")]
-    paths = [transcript] + sorted(glob.glob(os.path.join(base, "subagents", "*.jsonl")))
-    calls: Dict = {}
-    _collect(paths, since, calls)
-    return _total(calls)
+    prefix = os.path.join(transcript[: -len(".jsonl")], "subagents") + os.sep
+    return [p for p in index if p == transcript or p.startswith(prefix)]
 
 
 def share_numbers(transcript: str, hours: int, limit_used_pct: float, projects_dir: str,
                   cache_dir: Path, now: Optional[float] = None,
-                  resets_at: Optional[float] = None) -> Optional[Tuple[float, float, float]]:
+                  resets_at: Optional[float] = None,
+                  index: Optional[Dict[str, Dict]] = None
+                  ) -> Optional[Tuple[float, float, float]]:
     """(share %, session weighted tokens, window weighted tokens); None when the window is empty.
 
     The share is used% x (session / window): an estimate, see README.
     """
     now = time.time() if now is None else now
+    if index is None:
+        index = load_index(projects_dir, cache_dir, now)
     since_ts = window_start(hours, now, resets_at)
-    window = cached_window_total(hours, projects_dir, cache_dir, now, since_ts)
+    window = _total(index.values(), since_ts)
     if window <= 0:
         return None
-    session = session_total(transcript, since_ts)
+    session = _total((index[p] for p in session_paths(transcript, index)), since_ts)
     return limit_used_pct * session / window, session, window
 
 
