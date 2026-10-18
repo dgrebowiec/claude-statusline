@@ -1,4 +1,5 @@
 """Builds the one-line status from the JSON Claude Code passes on stdin."""
+import json
 import os
 import time
 from dataclasses import dataclass
@@ -9,6 +10,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from . import config as config_module
 from .cache import cache_status, last_cache_io
 from .config import Config
+from .samples import Samples
+from .transcript import tail_lines, usage_record
 from .usage import load_index, share_numbers
 
 DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
@@ -26,6 +29,7 @@ STYLES = {
     "dim": "2",
     "label": "1",          # bold
     "share": "3;36",       # italic cyan
+    "agent": "1;33",       # bold yellow: the subagent's name
     "tier_1h": "34",       # blue
     "tier_5m": "35",       # magenta
     "expired": "2;31",     # dim red
@@ -34,6 +38,7 @@ STYLES = {
 }
 
 BAR_WIDTH = 20
+ACTIVE_SECONDS = 30  # a subagent whose transcript changed this recently is shown as working
 LIMITS = {"5h": ("five_hour", 5), "7d": ("seven_day", 168)}  # field -> (payload key, hours)
 
 
@@ -71,6 +76,7 @@ class Sources:
         self.projects_dir = projects_dir
         self.cache_dir = cache_dir
         self._index = None
+        self._samples = None
 
     def has_transcript(self, path: str) -> bool:
         return os.path.isfile(path)
@@ -81,12 +87,70 @@ class Sources:
     def cache_io(self, transcript: str) -> Optional[Tuple[int, int]]:
         return last_cache_io(transcript)
 
-    def share(self, transcript: str, hours: int, used: float, now: float,
-              resets_at: Optional[float] = None) -> Optional[Tuple[float, float, float]]:
-        if self._index is None:  # 5h and 7d share one index update per run
+    def _load(self, now: float) -> None:
+        """Index and limit readings, once per run for all fields."""
+        if self._index is None:
             self._index = load_index(str(self.projects_dir), self.cache_dir, now)
-        return share_numbers(transcript, hours, used, str(self.projects_dir),
-                             self.cache_dir, now, resets_at, self._index)
+            self._samples = Samples(self.cache_dir, now)
+
+    def share(self, transcript: str, hours: int, used: float, now: float,
+              resets_at: Optional[float] = None,
+              paths: Optional[List[str]] = None) -> Optional[Tuple[float, float, float]]:
+        self._load(now)
+        return share_numbers(transcript, hours, used, str(self.projects_dir), self.cache_dir,
+                             now, resets_at, self._index, self._samples, paths)
+
+    def observe_limits(self, payload: Dict[str, Any], now: float) -> None:
+        """Log this run's reading of the limits for every session to split rises by."""
+        limits = payload.get("rate_limits") or {}
+        if not any((limits.get(key) or {}).get("resets_at") for key, _ in LIMITS.values()):
+            return
+        self._load(now)
+        for key, hours in LIMITS.values():
+            window = limits.get(key) or {}
+            used, resets_at = window.get("used_percentage"), window.get("resets_at")
+            if used is not None and resets_at is not None:
+                self._samples.observe(hours, float(used), float(resets_at), now)
+
+    def agents(self, transcript: str, now: float) -> List[Tuple[str, str, Optional[int]]]:
+        """(transcript, agent type, context tokens of its last call) of subagents active now."""
+        folder = os.path.join(transcript[: -len(".jsonl")], "subagents")
+        try:
+            entries = list(os.scandir(folder))
+        except OSError:
+            return []
+        active = []
+        for entry in entries:
+            try:
+                if not entry.name.endswith(".jsonl") or now - entry.stat().st_mtime > ACTIVE_SECONDS:
+                    continue
+            except OSError:
+                continue
+            active.append((entry.path, _agent_type(entry.path), _last_context(entry.path)))
+        return sorted(active)
+
+
+def _agent_type(transcript: str) -> str:
+    try:
+        with open(transcript[: -len(".jsonl")] + ".meta.json", encoding="utf-8") as fh:
+            return json.load(fh).get("agentType") or "agent"
+    except (OSError, ValueError, AttributeError):
+        return "agent"
+
+
+def _last_context(transcript: str) -> Optional[int]:
+    """Context size of the last call: uncached input + cache reads + cache writes."""
+    try:
+        lines = tail_lines(transcript, 200)
+    except OSError:
+        return None
+    for line in reversed(lines):
+        rec = usage_record(line)
+        if rec is not None:
+            usage = rec["usage"]
+            return sum(usage.get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens",
+                                                     "cache_creation_input_tokens"))
+    return None
 
 
 @dataclass
@@ -237,6 +301,30 @@ def _share(f: Frame) -> Optional[str]:
     return paint(prefix + " · ".join(parts), "share", f.on)
 
 
+def _agents(f: Frame) -> Optional[str]:
+    """Subagents working right now: type, context of the last call, share of the 5 h limit."""
+    if not f.transcript:
+        return None
+    window = (f.payload.get("rate_limits") or {}).get("five_hour") or {}
+    used = window.get("used_percentage")
+    parts = []
+    for path, name, context in f.sources.agents(f.transcript, f.now):
+        text = paint(name, "agent", f.on)
+        if f.config.level == "minimal":
+            parts.append(text + (f" {fmt_tokens(context)}" if context is not None else ""))
+            continue
+        details = []
+        if context is not None:
+            details.append(f"ctx {fmt_tokens(context)}")
+        if used is not None:
+            numbers = f.sources.share(f.transcript, 5, float(used), f.now,
+                                      window.get("resets_at"), [path])
+            if numbers is not None:
+                details.append(f"5h ~{numbers[0]:.1f}%")
+        parts.append(text + (": " + " · ".join(details) if details else ""))
+    return ", ".join(parts) if parts else None
+
+
 BUILDERS: Dict[str, Callable[[Frame], Optional[str]]] = {
     "model": _model,
     "effort": _effort,
@@ -246,6 +334,7 @@ BUILDERS: Dict[str, Callable[[Frame], Optional[str]]] = {
     "7d": _limit("7d"),
     "share": _share,
     "cacheio": _cacheio,
+    "agents": _agents,
 }
 
 
@@ -254,6 +343,7 @@ def build(payload: Dict[str, Any], now: float, config: Config, sources: Sources)
     transcript = payload.get("transcript_path") or None
     if transcript and not sources.has_transcript(transcript):
         transcript = None
+    sources.observe_limits(payload, now)
     frame = Frame(payload, now, config, sources, transcript, on)
     parts: List[str] = [text for text in (BUILDERS[name](frame) for name in config.fields)
                         if text]
@@ -296,7 +386,15 @@ class DemoSources(Sources):
     def cache_io(self, transcript: str) -> Optional[Tuple[int, int]]:
         return 118_432, 4_120
 
-    def share(self, transcript, hours, used, now, resets_at=None):
+    def observe_limits(self, payload, now):
+        pass
+
+    def agents(self, transcript, now):
+        return [("demo/subagents/a.jsonl", "explorer", 82_000)]
+
+    def share(self, transcript, hours, used, now, resets_at=None, paths=None):
+        if paths is not None:
+            return 4.8, 240_000, 5_100_000
         if hours == 5:
             return 23.2, 1_180_000, 5_100_000
         return 0.6, 1_180_000, 196_000_000

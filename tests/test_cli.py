@@ -205,3 +205,31 @@ def test_cacheio_none_without_transcript(tmp_path):
 def test_cacheio_is_off_by_default():
     assert "cacheio" not in Config().fields
     assert "cacheio" in FIELDS
+
+
+def test_render_shows_active_subagents(tmp_path):
+    import os
+    when = datetime.datetime.fromtimestamp(NOW - 60, datetime.timezone.utc)
+    stamp = when.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+    def call(key, usage):
+        return json.dumps({"timestamp": stamp, "message": {"id": key, "model": "claude-opus-5",
+                                                           "usage": usage}})
+
+    main = tmp_path / "projects" / "p" / "s.jsonl"
+    main.parent.mkdir(parents=True)
+    main.write_text(call("m", {"input_tokens": 1000}) + "\n")
+    agents = tmp_path / "projects" / "p" / "s" / "subagents"
+    agents.mkdir(parents=True)
+    busy = agents / "agent-a.jsonl"
+    busy.write_text(call("a", {"input_tokens": 10, "cache_read_input_tokens": 82_000}) + "\n")
+    (agents / "agent-a.meta.json").write_text('{"agentType": "wykonawca"}')
+    idle = agents / "agent-b.jsonl"
+    idle.write_text(call("b", {"input_tokens": 5}) + "\n")
+    os.utime(busy, (NOW - 5, NOW - 5))
+    os.utime(idle, (NOW - 600, NOW - 600))
+    payload = _payload(transcript_path=str(main), rate_limits={
+        "five_hour": {"used_percentage": 50.0, "resets_at": NOW + 3600}})
+    line = _render(tmp_path, payload)
+    assert line.endswith("wykonawca: ctx 82k · 5h ~44.5%")  # 50 % x 8_210 / 9_215 wt
+    assert "agent:" not in line  # the idle one is not shown

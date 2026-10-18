@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-FIELDS = ("model", "effort", "context", "cache", "5h", "7d", "share", "cacheio")
+FIELDS = ("model", "effort", "context", "cache", "5h", "7d", "share", "cacheio", "agents")
 FIELD_DESCRIPTIONS = {
     "model": "model name",
     "effort": "effort level",
@@ -15,9 +15,10 @@ FIELD_DESCRIPTIONS = {
     "7d": "7-day plan limit",
     "share": "this session's share of the limits",
     "cacheio": "tokens read from and written to the cache by the last call",
+    "agents": "subagents working now: context and share of the 5-hour limit",
 }
 LEVELS = ("minimal", "normal", "detailed")
-DEFAULT_FIELDS = ["model", "effort", "context", "cache", "5h", "7d", "share"]
+DEFAULT_FIELDS = ["model", "effort", "context", "cache", "5h", "7d", "share", "agents"]
 DEFAULT_SEPARATOR = " | "
 
 

@@ -2,22 +2,21 @@
 
 Every API call of the last 7 days is kept in an index (cache dir, `index.json`) as
 key -> (time, weighted tokens). Transcripts are append-only, so each run reads only the bytes
-added since the last run; the window and session totals are sums over the index.
+added since the last run; the window and session totals are sums over the index. Each rise of
+the limit between two readings (see samples.py) is split by the calls made in that span.
 """
 import json
 import os
 import time
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Set, Tuple
 
 from .pricing import weighted
+from .samples import Samples
 from .transcript import usage_record
 
 INDEX_VERSION = 1  # bump when the weights change: the index stores weighted tokens
 MAX_HOURS = 168    # the longest window; older files are dropped from the index
-
-Calls = Dict[str, List[float]]  # message key -> [Unix time, weighted tokens]
-
 
 def window_start(hours: int, now: float, resets_at: Optional[float] = None) -> float:
     """Start of the limit window: resets_at - window length, or the last `hours` when unknown.
@@ -105,11 +104,15 @@ def load_index(projects_dir: str, cache_dir: Path, now: float) -> Dict[str, Dict
     return fresh
 
 
-def _total(entries, since_ts: float) -> float:
-    calls: Calls = {}
-    for entry in entries:
-        calls.update(entry["calls"])
-    return sum(w for t, w in calls.values() if t >= since_ts)
+def _window_calls(index: Dict[str, Dict], session: Set[str],
+                  since_ts: float) -> List[Tuple[float, float, bool]]:
+    """(time, weighted tokens, part of the session) of every call since since_ts, by time."""
+    calls: Dict[str, Tuple[float, float, bool]] = {}
+    for path, entry in index.items():
+        mine = path in session
+        for key, (t, w) in entry["calls"].items():
+            calls[key] = (t, w, mine)
+    return sorted(c for c in calls.values() if c[0] >= since_ts)
 
 
 def session_paths(transcript: str, index: Dict[str, Dict]) -> List[str]:
@@ -118,24 +121,60 @@ def session_paths(transcript: str, index: Dict[str, Dict]) -> List[str]:
     return [p for p in index if p == transcript or p.startswith(prefix)]
 
 
+def attributed_share(calls: List[Tuple[float, float, bool]],
+                     points: List[Tuple[float, float]]) -> float:
+    """Each rise of the limit between two readings, split by weighted tokens in that span.
+
+    points are (time, used %) from the window start (0 %) up; calls after the last reading
+    are not in any reading yet. A rise in a span without calls is split like the last span
+    with calls: it is usually a reading that came late (an idle session logged an old value
+    first), and only rarely usage from another machine.
+    """
+    share = 0.0
+    ratio = None  # mine / total of the last span with calls
+    i = 0
+    for (_, used_a), (t_b, used_b) in zip(points, points[1:]):
+        mine = total = 0.0
+        while i < len(calls) and calls[i][0] <= t_b:
+            _, w, is_mine = calls[i]
+            total += w
+            mine += w if is_mine else 0.0
+            i += 1
+        if total > 0:
+            ratio = mine / total
+        if ratio is not None:
+            share += (used_b - used_a) * ratio
+    return share
+
+
 def share_numbers(transcript: str, hours: int, limit_used_pct: float, projects_dir: str,
                   cache_dir: Path, now: Optional[float] = None,
                   resets_at: Optional[float] = None,
-                  index: Optional[Dict[str, Dict]] = None
-                  ) -> Optional[Tuple[float, float, float]]:
+                  index: Optional[Dict[str, Dict]] = None,
+                  samples: Optional[Samples] = None,
+                  paths: Optional[List[str]] = None) -> Optional[Tuple[float, float, float]]:
     """(share %, session weighted tokens, window weighted tokens); None when the window is empty.
 
-    The share is used% x (session / window): an estimate, see README.
+    `paths` are the transcripts counted as "the session"; by default the main transcript and
+    its subagents. Without readings of the limit (`samples`), the share is
+    used% x (session / window); with them, each rise is split separately (see README).
     """
     now = time.time() if now is None else now
     if index is None:
         index = load_index(projects_dir, cache_dir, now)
     since_ts = window_start(hours, now, resets_at)
-    window = _total(index.values(), since_ts)
-    if window <= 0:
+    session = set(paths if paths is not None else session_paths(transcript, index))
+    calls = _window_calls(index, session, since_ts)
+    window_wt = sum(w for _, w, _ in calls)
+    if window_wt <= 0:
         return None
-    session = _total((index[p] for p in session_paths(transcript, index)), since_ts)
-    return limit_used_pct * session / window, session, window
+    session_wt = sum(w for _, w, mine in calls if mine)
+    points = [(since_ts, 0.0)]
+    if samples is not None and resets_at is not None:
+        points += [p for p in samples.window(hours, resets_at) if p[0] > since_ts]
+    if limit_used_pct > points[-1][1]:
+        points.append((now, limit_used_pct))
+    return attributed_share(calls, points), session_wt, window_wt
 
 
 def session_share(transcript: str, hours: int, limit_used_pct: float, projects_dir: str,
