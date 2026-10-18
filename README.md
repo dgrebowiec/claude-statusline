@@ -64,8 +64,8 @@ claude-statusline preview             # print a sample line with the current set
 
 Settings are stored in `~/.claude/claude-statusline.json` (override with the
 `CLAUDE_STATUSLINE_CONFIG` environment variable). Fields: `model`, `effort`, `context`, `cache`,
-`5h`, `7d`, `share`, `agents`, `cacheio` (off by default; turn it on with `claude-statusline configure`
-or `--fields`). The order in `fields` is the order on the line.
+`5h`, `7d`, `share`, `cacheio` (off by default; turn it on with `claude-statusline configure`
+or `--fields`), `agents`. The order in `fields` is the order on the line.
 
 Detail levels:
 
