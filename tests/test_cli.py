@@ -269,7 +269,7 @@ def test_render_shows_working_subagents(tmp_path):
         "five_hour": {"used_percentage": 50.0, "resets_at": NOW + 3600}})
     line = _render(tmp_path, payload)
     # 50 % x 8_210 / 9_220 wt (main 1000, busy 8_210, done 5, killed 5)
-    assert line.endswith("wykonawca 8m00s: Bash 8m00s · ctx 82k · 5h ~44.5%")
+    assert line.endswith("wykonawca 8m00s: 5h ~44.5%")
     assert "agent:" not in line and "agent " not in line  # finished and stale ones are hidden
 
 def test_duration_shows_seconds():

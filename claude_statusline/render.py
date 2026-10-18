@@ -41,7 +41,6 @@ BAR_WIDTH = 20
 # A subagent is working until its last reply ends its turn. One cut off without that (killed,
 # Claude Code closed) is dropped once its transcript has not changed for this long.
 STALE_SECONDS = 3600
-TOOL_WAIT_SHOWN = 10  # seconds of waiting for a tool before the line shows it
 LIMITS = {"5h": ("five_hour", 5), "7d": ("seven_day", 168)}  # field -> (payload key, hours)
 
 
@@ -145,11 +144,8 @@ def _agent_type(transcript: str) -> str:
 
 class AgentStatus(NamedTuple):
     path: str
-    name: str                # agent type from <transcript>.meta.json
-    context: Optional[int]   # context size of the last call
-    tool: Optional[str]      # tool it waits for, when the last reply asked for one
-    since: Optional[float]   # Unix time of that request
-    started: Optional[float] # Unix time of its first record
+    name: str                 # agent type from <transcript>.meta.json
+    started: Optional[float]  # Unix time of its first record
 
 
 def _agent_status(transcript: str) -> Optional[AgentStatus]:
@@ -162,34 +158,18 @@ def _agent_status(transcript: str) -> Optional[AgentStatus]:
         lines = tail_lines(transcript, 200)
     except OSError:
         return None
-    context = tool = since = None
     for line in reversed(lines):
         if '"type":"assistant"' not in line.replace(" ", ""):
             continue
         try:
-            rec = json.loads(line)
-        except ValueError:
+            msg = json.loads(line).get("message") or {}
+        except (ValueError, AttributeError):
             continue
-        msg = rec.get("message") or {}
-        if context is None and msg.get("usage"):
-            usage = msg["usage"]
-            context = sum(usage.get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens",
-                                                        "cache_creation_input_tokens"))
+        if msg.get("usage"):
             if msg.get("stop_reason") == "end_turn":
                 return None
-            if msg.get("stop_reason") == "tool_use":
-                content = msg.get("content")
-                uses = [c for c in content if isinstance(c, dict) and c.get("type") == "tool_use"] \
-                    if isinstance(content, list) else []
-                if uses:
-                    tool = uses[-1].get("name")
-                    try:
-                        since = parse_time(rec["timestamp"]).timestamp()
-                    except (KeyError, ValueError, AttributeError):
-                        since = None
             break
-    return AgentStatus(transcript, _agent_type(transcript), context, tool, since,
-                       _first_time(transcript))
+    return AgentStatus(transcript, _agent_type(transcript), _first_time(transcript))
 
 
 def _first_time(transcript: str) -> Optional[float]:
@@ -355,7 +335,7 @@ def _share(f: Frame) -> Optional[str]:
 
 
 def _duration(seconds: float) -> str:
-    """45s, 8m05s, 1h02m: with seconds, so each timed refresh visibly moves it."""
+    """45s, 8m05s, 1h02m."""
     seconds = int(seconds)
     if seconds < 60:
         return f"{seconds}s"
@@ -365,30 +345,29 @@ def _duration(seconds: float) -> str:
 
 
 def _agents(f: Frame) -> Optional[str]:
-    """Subagents working right now: type, context of the last call, share of the 5 h limit."""
+    """Subagents working right now: how long, and their share of the 5 h limit so far."""
     if not f.transcript:
         return None
     window = (f.payload.get("rate_limits") or {}).get("five_hour") or {}
     used = window.get("used_percentage")
     parts = []
-    for path, name, context, tool, since, started in f.sources.agents(f.transcript, f.now):
+    for path, name, started in f.sources.agents(f.transcript, f.now):
         text = paint(name, "agent", f.on)
         if started is not None and f.config.level != "minimal":
             text += " " + _duration(f.now - started)
-        if f.config.level == "minimal":
-            parts.append(text + (f" {fmt_tokens(context)}" if context is not None else ""))
-            continue
-        details = []
-        if tool and since is not None and f.now - since >= TOOL_WAIT_SHOWN:
-            details.append(f"{tool} {_duration(f.now - since)}")
-        if context is not None:
-            details.append(f"ctx {fmt_tokens(context)}")
+        numbers = None
         if used is not None:
             numbers = f.sources.share(f.transcript, 5, float(used), f.now,
                                       window.get("resets_at"), [path])
-            if numbers is not None:
-                details.append(f"5h ~{numbers[0]:.1f}%")
-        parts.append(text + (": " + " · ".join(details) if details else ""))
+        if numbers is not None:
+            share, agent_wt, _ = numbers
+            if f.config.level == "minimal":
+                text += f" ~{share:.1f}%"
+            else:
+                text += f": 5h ~{share:.1f}%"
+                if f.config.level == "detailed":
+                    text += f" ({fmt_tokens(agent_wt)} wt)"
+        parts.append(text)
     return ", ".join(parts) if parts else None
 
 
@@ -457,8 +436,7 @@ class DemoSources(Sources):
         pass
 
     def agents(self, transcript, now):
-        return [AgentStatus("demo/subagents/a.jsonl", "explorer", 82_000, "Bash", DEMO_NOW - 262,
-                            DEMO_NOW - 4560)]
+        return [AgentStatus("demo/subagents/a.jsonl", "explorer", DEMO_NOW - 4560)]
 
     def share(self, transcript, hours, used, now, resets_at=None, paths=None):
         if paths is not None:
