@@ -238,41 +238,6 @@ def test_cacheio_is_off_by_default():
     assert "cacheio" in FIELDS
 
 
-def test_render_shows_working_subagents(tmp_path):
-    import os
-
-    def call(key, usage, stop, minutes_ago, tool=None):
-        stamp = datetime.datetime.fromtimestamp(NOW - minutes_ago * 60, datetime.timezone.utc)
-        content = [{"type": "tool_use", "name": tool}] if tool else [{"type": "text"}]
-        return json.dumps({"type": "assistant",
-                           "timestamp": stamp.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
-                           "message": {"id": key, "model": "claude-opus-5", "usage": usage,
-                                       "stop_reason": stop, "content": content}})
-
-    main = tmp_path / "projects" / "p" / "s.jsonl"
-    main.parent.mkdir(parents=True)
-    main.write_text(call("m", {"input_tokens": 1000}, "tool_use", 9, "Agent") + "\n")
-    agents = tmp_path / "projects" / "p" / "s" / "subagents"
-    agents.mkdir(parents=True)
-    # waits 8 minutes for a build: nothing written meanwhile, but it is working
-    busy = agents / "agent-a.jsonl"
-    busy.write_text(call("a", {"input_tokens": 10, "cache_read_input_tokens": 82_000},
-                         "tool_use", 8, "Bash") + "\n")
-    (agents / "agent-a.meta.json").write_text('{"agentType": "wykonawca"}')
-    done = agents / "agent-b.jsonl"
-    done.write_text(call("b", {"input_tokens": 5}, "end_turn", 1) + "\n")
-    killed = agents / "agent-c.jsonl"
-    killed.write_text(call("c", {"input_tokens": 5}, "tool_use", 120, "Bash") + "\n")
-    os.utime(busy, (NOW - 480, NOW - 480))
-    os.utime(killed, (NOW - 7200, NOW - 7200))
-    payload = _payload(transcript_path=str(main), rate_limits={
-        "five_hour": {"used_percentage": 50.0, "resets_at": NOW + 3600}})
-    line = render(payload, now=NOW, projects_dir=tmp_path / "projects",
-                  cache_dir=tmp_path / "cache", config=Config(fields=["share", "agents"]))
-    # 50 % x 8_210 / 9_220 wt (main 1000, busy 8_210, done 5, killed 5)
-    assert line.endswith("wykonawca: 5h ~44.5%")
-    assert "agent:" not in line and "agent " not in line  # finished and stale ones are hidden
-
 def test_agent_panel_is_opt_in_and_keeps_a_foreign_one(tmp_path):
     from claude_statusline.settings import get_agent_panel, set_agent_panel
     path = tmp_path / "settings.json"
@@ -309,8 +274,8 @@ def test_subagent_lines_give_each_task_its_share(tmp_path):
     agents.mkdir(parents=True)
     (agents / "agent-abc.jsonl").write_text(call("a", 1000))
     Samples(tmp_path / "cache", NOW).observe(5, 40.0, NOW + 3600, NOW)
-    payload = {"transcript_path": str(main), "columns": 60, "tasks": [
-        {"id": "abc", "status": "running", "agentType": "wykonawca", "label": "Kompiluję",
+    payload = {"transcript_path": str(main), "columns": 90, "tasks": [
+        {"id": "abc", "status": "running", "agentType": "wykonawca", "label": "Kompiluję", "effort": "high",
          "startTime": (NOW - 375) * 1000, "tokenCount": 59_300},
         {"id": "gone", "status": "running"},
         {"id": "old", "status": "completed"}]}
@@ -318,12 +283,30 @@ def test_subagent_lines_give_each_task_its_share(tmp_path):
     rows = [json.loads(line) for line in lines]
     assert [r["id"] for r in rows] == ["abc"]
     content = rows[0]["content"]
-    assert len(content) == 60
+    assert len(content) == 90
     assert content.startswith("wykonawca  Kompiluję ")
-    assert content.endswith("6m 15s · ↓ 59.3k tokens · 5h ~10.0%")
+    assert content.endswith("6m 15s · ↓ 59.3k tokens · Opus 5 (effort: high) · 5h ~10.0%")
 
 
 def test_subagent_row_cuts_the_description_to_fit():
     from claude_statusline.subagent import row
     line = row("x", 3, "a long description", "1s · 5h ~1.0%", 30)
     assert len(line) == 30 and line.startswith("x    a long") and "…" in line
+
+
+def test_agent_panel_fields_choose_and_order_the_right_part():
+    from claude_statusline.subagent import right_part
+    args = (NOW, NOW - 60, 2000, "claude-sonnet-5-5", "high", ("5m", NOW + 60), 1.5, False)
+    assert right_part(["share", "model"], *args) == "5h ~1.5% · Sonnet 5.5 (effort: high)"
+    assert right_part(["time", "tokens"], *args) == "1m 0s · ↓ 2.0k tokens"
+
+
+def test_configurator_edits_agent_panel_fields_separately():
+    from claude_statusline.configure import Editor
+    editor = Editor(Config())
+    editor.cursor = len(editor.order)  # first agent panel row
+    editor.toggle()
+    assert "time" not in editor.config.agent_fields and "model" in editor.config.fields
+    editor.move(1)
+    assert editor.agent_order[:2] == ["tokens", "time"] and editor.cursor == len(editor.order) + 1
+    assert any("Agent panel preview" in line for line in editor.screen(120))

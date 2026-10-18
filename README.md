@@ -14,15 +14,10 @@ Haiku 5.5 | [##------------------] 12% (118k/1.0M) | cache 1h: until 16:30:26 | 
   prompt cache by the last API call, e.g. `cache read 118k, write 4k`.
 - **Plan limits:** 5-hour and 7-day usage with time until reset, from Claude Code's own data.
 - **Session share:** estimate of how much of each limit this session used.
-- **Working subagents (optional `agents` field):** subagents of this session that have not finished,
-  with their share of the 5-hour limit so far, e.g. `wykonawca: 5h ~20.7%`. Shares, like the session's, are points of the whole limit:
-  at `5h: 50%`, `~20.7%` means 20.7 of those 50 points. A subagent counts as finished when its
-  last reply ends its turn; one cut off without that is dropped after an hour without changes.
-  Claude Code always sends the main thread's data, even when you view a subagent. Off by
-  default; the optional [agent panel](#agent-panel) shows the same share.
-- **Agent panel (optional):** each running subagent's share of the 5-hour limit at the end of
-  its row in Claude Code's own list of agents (below the prompt), through the
-  `subagentStatusLine` setting.
+- **Agent panel (optional):** each running subagent's model, effort, prompt cache and share of the
+  5-hour limit at the end of its row in Claude Code's own list of agents (below the prompt),
+  through the `subagentStatusLine` setting. Shares, like the session's, are points of the whole
+  limit: at `5h: 50%`, `~20.7%` means 20.7 of those 50 points.
 
 It uses 0 tokens: it only reads local data and never calls the model.
 
@@ -68,8 +63,9 @@ claude-statusline preview             # print a sample line with the current set
 
 Settings are stored in `~/.claude/claude-statusline.json` (override with the
 `CLAUDE_STATUSLINE_CONFIG` environment variable). Fields: `model`, `effort`, `context`, `cache`,
-`5h`, `7d`, `share`, `cacheio` and `agents` (both off by default; turn them on with
-`claude-statusline configure` or `--fields`). The order in `fields` is the order on the line.
+`5h`, `7d`, `share` and `cacheio` (off by default; turn it on with
+`claude-statusline configure` or `--fields`). The agent panel has its own `agent_fields` (`time`,
+`tokens`, `model`, `cache`, `share`), set in its own section of `configure`. The order in `fields` is the order on the line.
 
 Detail levels:
 
@@ -110,7 +106,6 @@ What a timed refresh updates while a subagent works:
 |---|---|---|
 | `5h`, `7d` | yes | Claude Code takes them from the last API response, subagent calls included |
 | `share` | yes | it reads the subagent transcripts from disk |
-| `agents` | yes | share of each working subagent |
 | `context`, `cache`, `cacheio` | no | they describe the main thread only |
 
 Each run also logs the current limit reading (see

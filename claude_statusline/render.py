@@ -1,17 +1,16 @@
 """Builds the one-line status from the JSON Claude Code passes on stdin."""
-import json
 import os
 import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from . import config as config_module
 from .cache import cache_status, last_cache_io
 from .config import Config
 from .samples import Samples
-from .transcript import tail_lines
+from .pricing import display_model
 from .usage import load_index, share_numbers
 
 DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
@@ -29,7 +28,6 @@ STYLES = {
     "dim": "2",
     "label": "1",          # bold
     "share": "3;36",       # italic cyan
-    "agent": "1;33",       # bold yellow: the subagent's name
     "tier_1h": "34",       # blue
     "tier_5m": "35",       # magenta
     "expired": "2;31",     # dim red
@@ -38,9 +36,6 @@ STYLES = {
 }
 
 BAR_WIDTH = 20
-# A subagent is working until its last reply ends its turn. One cut off without that (killed,
-# Claude Code closed) is dropped once its transcript has not changed for this long.
-STALE_SECONDS = 3600
 LIMITS = {"5h": ("five_hour", 5), "7d": ("seven_day", 168)}  # field -> (payload key, hours)
 
 
@@ -113,62 +108,6 @@ class Sources:
             used, resets_at = window.get("used_percentage"), window.get("resets_at")
             if used is not None and resets_at is not None:
                 self._samples.observe(hours, float(used), float(resets_at), now)
-
-    def agents(self, transcript: str, now: float) -> List["AgentStatus"]:
-        """Subagents of the session that are working now, by transcript path."""
-        folder = os.path.join(transcript[: -len(".jsonl")], "subagents")
-        try:
-            entries = list(os.scandir(folder))
-        except OSError:
-            return []
-        active = []
-        for entry in entries:
-            try:
-                if not entry.name.endswith(".jsonl") or now - entry.stat().st_mtime > STALE_SECONDS:
-                    continue
-            except OSError:
-                continue
-            status = _agent_status(entry.path)
-            if status is not None:
-                active.append(status)
-        return sorted(active)
-
-
-def _agent_type(transcript: str) -> str:
-    try:
-        with open(transcript[: -len(".jsonl")] + ".meta.json", encoding="utf-8") as fh:
-            return json.load(fh).get("agentType") or "agent"
-    except (OSError, ValueError, AttributeError):
-        return "agent"
-
-
-class AgentStatus(NamedTuple):
-    path: str
-    name: str  # agent type from <transcript>.meta.json
-
-
-def _agent_status(transcript: str) -> Optional[AgentStatus]:
-    """Status of a subagent from the end of its transcript; None when it has finished.
-
-    A finished subagent's last reply has stop_reason "end_turn". While a tool runs (a long
-    build, say), nothing is written, so the file's age says nothing about whether it works.
-    """
-    try:
-        lines = tail_lines(transcript, 200)
-    except OSError:
-        return None
-    for line in reversed(lines):
-        if '"type":"assistant"' not in line.replace(" ", ""):
-            continue
-        try:
-            msg = json.loads(line).get("message") or {}
-        except (ValueError, AttributeError):
-            continue
-        if msg.get("usage"):
-            if msg.get("stop_reason") == "end_turn":
-                return None
-            break
-    return AgentStatus(transcript, _agent_type(transcript))
 
 
 @dataclass
@@ -319,29 +258,44 @@ def _share(f: Frame) -> Optional[str]:
     return paint(prefix + " · ".join(parts), "share", f.on)
 
 
-def _agents(f: Frame) -> Optional[str]:
-    """Subagents working right now and their share of the 5 h limit so far."""
-    if not f.transcript:
+def cache_short(status: Tuple[str, float], now: float, on: bool) -> str:
+    """cache 5m until 14:03:22 / cache 5m expired 14:03:22, for rows that are short on room."""
+    tier, expires_at = status
+    clock = datetime.fromtimestamp(expires_at).strftime("%H:%M:%S")
+    head = "cache " + paint(tier, f"tier_{tier}", on) + " "
+    if expires_at <= now:
+        return head + paint(f"expired {clock}", "expired", on)
+    return head + paint(f"until {clock}", f"tier_{tier}", on)
+
+
+def model_text(model_id: Optional[str], effort: Optional[str], on: bool) -> Optional[str]:
+    """Model name and, when known, its effort, painted as in the main status line."""
+    if not model_id:
         return None
-    window = (f.payload.get("rate_limits") or {}).get("five_hour") or {}
-    used = window.get("used_percentage")
-    parts = []
-    for path, name in f.sources.agents(f.transcript, f.now):
-        text = paint(name, "agent", f.on)
-        numbers = None
-        if used is not None:
-            numbers = f.sources.share(f.transcript, 5, float(used), f.now,
-                                      window.get("resets_at"), [path])
-        if numbers is not None:
-            share, agent_wt, _ = numbers
-            if f.config.level == "minimal":
-                text += f" ~{share:.1f}%"
-            else:
-                text += f": 5h ~{share:.1f}%"
-                if f.config.level == "detailed":
-                    text += f" ({fmt_tokens(agent_wt)} wt)"
-        parts.append(text)
-    return ", ".join(parts) if parts else None
+    text = paint(display_model(model_id), "model", on)
+    if effort:
+        text += " " + paint(f"(effort: {effort})", "effort", on)
+    return text
+
+
+def cache_short(status: Tuple[str, float], now: float, on: bool) -> str:
+    """cache 5m until 14:03:22 / cache 5m expired 14:03:22, for rows that are short on room."""
+    tier, expires_at = status
+    clock = datetime.fromtimestamp(expires_at).strftime("%H:%M:%S")
+    head = "cache " + paint(tier, f"tier_{tier}", on) + " "
+    if expires_at <= now:
+        return head + paint(f"expired {clock}", "expired", on)
+    return head + paint(f"until {clock}", f"tier_{tier}", on)
+
+
+def model_text(model_id: Optional[str], effort: Optional[str], on: bool) -> Optional[str]:
+    """Model name and, when known, its effort, painted as in the main status line."""
+    if not model_id:
+        return None
+    text = paint(display_model(model_id), "model", on)
+    if effort:
+        text += " " + paint(f"(effort: {effort})", "effort", on)
+    return text
 
 
 BUILDERS: Dict[str, Callable[[Frame], Optional[str]]] = {
@@ -353,7 +307,6 @@ BUILDERS: Dict[str, Callable[[Frame], Optional[str]]] = {
     "7d": _limit("7d"),
     "share": _share,
     "cacheio": _cacheio,
-    "agents": _agents,
 }
 
 
@@ -407,9 +360,6 @@ class DemoSources(Sources):
 
     def observe_limits(self, payload, now):
         pass
-
-    def agents(self, transcript, now):
-        return [AgentStatus("demo/subagents/a.jsonl", "explorer")]
 
     def share(self, transcript, hours, used, now, resets_at=None, paths=None):
         if paths is not None:

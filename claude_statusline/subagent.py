@@ -10,12 +10,17 @@ Content returned for a task replaces its whole row after the status circle, the 
 added on the right. Tasks that are not running get no content and keep Claude Code's own row.
 """
 import json
+import re
 import os
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
+from .cache import cache_status
+from .config import Config
+from .render import DEMO_NOW, cache_short, colours_enabled, model_text, paint
 from .samples import Samples
+from .transcript import last_model
 from .usage import load_index, share_numbers
 
 NAME_GAP = 2  # spaces between the agent name and its description, as in Claude Code
@@ -42,19 +47,50 @@ def fmt_count(tokens: float) -> str:
     return str(int(tokens))
 
 
+def visible_len(text: str) -> int:
+    return len(re.sub(r"\033\[[0-9;]*m", "", text))
+
+
 def row(name: str, name_width: int, label: str, right: str, columns: int) -> str:
-    """name, description, and right part flush right; the description is cut to fit."""
+    """name, description, and right part flush right; the description is cut to fit.
+
+    The right part may carry colour codes; they take no room.
+    """
     left = name.ljust(name_width) + " " * NAME_GAP
-    room = columns - len(left) - len(right) - 1
+    room = columns - len(left) - visible_len(right) - 1
     if room < len(label):
         label = label[: room - 1] + "…" if room > 1 else ""
-    return left + label + " " * max(1, columns - len(left) - len(label) - len(right)) + right
+    return left + label + " " * max(1, columns - len(left) - len(label) - visible_len(right)) + right
+
+
+def right_part(fields: List[str], now: float, started: Optional[float], tokens: Optional[float],
+               model_id: Optional[str], effort: Optional[str],
+               cache: Optional[Tuple[str, float]], share: float, colors: bool) -> str:
+    """The chosen pieces of a row's right part, in the configured order."""
+    pieces = {
+        "time": fmt_elapsed(now - started) if started else None,
+        "tokens": f"↓ {fmt_count(tokens)} tokens" if tokens else None,
+        "model": model_text(model_id, effort, colors),
+        "cache": cache_short(cache, now, colors) if cache else None,
+        "share": paint(f"5h ~{share:.1f}%", "share", colors),
+    }
+    return " · ".join(pieces[name] for name in fields if pieces.get(name))
+
+
+def panel_preview(config: Config, columns: int = 100) -> str:
+    """One demo row of the agent panel, for the configurator."""
+    now = DEMO_NOW
+    right = right_part(config.agent_fields, now, now - 375, 59_300, "claude-sonnet-5-5", "medium",
+                       ("5m", now + 200), 4.8, colours_enabled(config))
+    return row("explorer", len("explorer"), "Mapping the config module", right, columns)
 
 
 def subagent_lines(payload: Dict[str, Any], projects_dir: Path, cache_dir: Path,
-                   now: Optional[float] = None) -> List[str]:
+                   now: Optional[float] = None, colors: bool = False,
+                   config: Optional[Config] = None) -> List[str]:
     """One JSON line {"id", "content"} per running task whose share can be computed."""
     now = time.time() if now is None else now
+    config = config or Config()
     transcript = payload.get("transcript_path") or ""
     tasks = [t for t in payload.get("tasks") or [] if isinstance(t, dict) and t.get("id")]
     if not transcript.endswith(".jsonl") or not tasks:
@@ -78,13 +114,11 @@ def subagent_lines(payload: Dict[str, Any], projects_dir: Path, cache_dir: Path,
                                 resets_at, index, samples, [path])
         if numbers is None:
             continue
-        right = []
-        if task.get("startTime"):
-            right.append(fmt_elapsed(now - task["startTime"] / 1000))
-        if task.get("tokenCount"):
-            right.append(f"↓ {fmt_count(task['tokenCount'])} tokens")
-        right.append(f"5h ~{numbers[0]:.1f}%")
+        started = task["startTime"] / 1000 if task.get("startTime") else None
+        right = right_part(config.agent_fields, now, started, task.get("tokenCount"),
+                           last_model(path), task.get("effort") or None, cache_status(path),
+                           numbers[0], colors)
         label = task.get("label") or task.get("description") or ""
-        content = row(names[task["id"]], name_width, label, " · ".join(right), columns)
+        content = row(names[task["id"]], name_width, label, right, columns)
         lines.append(json.dumps({"id": task["id"], "content": content}, ensure_ascii=False))
     return lines

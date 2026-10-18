@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-FIELDS = ("model", "effort", "context", "cache", "5h", "7d", "share", "cacheio", "agents")
+FIELDS = ("model", "effort", "context", "cache", "5h", "7d", "share", "cacheio")
 FIELD_DESCRIPTIONS = {
     "model": "model name",
     "effort": "effort level",
@@ -15,7 +15,14 @@ FIELD_DESCRIPTIONS = {
     "7d": "7-day plan limit",
     "share": "this session's share of the limits",
     "cacheio": "tokens read from and written to the cache by the last call",
-    "agents": "subagents working now: context and share of the 5-hour limit",
+}
+AGENT_FIELDS = ("time", "tokens", "model", "cache", "share")
+AGENT_FIELD_DESCRIPTIONS = {
+    "time": "how long the subagent has been working",
+    "tokens": "tokens the subagent has used",
+    "model": "model name and effort",
+    "cache": "prompt cache tier and expiry time",
+    "share": "its share of the 5-hour limit",
 }
 LEVELS = ("minimal", "normal", "detailed")
 DEFAULT_FIELDS = ["model", "effort", "context", "cache", "5h", "7d", "share"]
@@ -28,10 +35,12 @@ class Config:
     fields: List[str] = field(default_factory=lambda: list(DEFAULT_FIELDS))
     separator: str = DEFAULT_SEPARATOR
     colors: bool = True
+    agent_fields: List[str] = field(default_factory=lambda: list(AGENT_FIELDS))
 
     def to_dict(self) -> Dict[str, Any]:
         return {"level": self.level, "fields": list(self.fields),
-                "separator": self.separator, "colors": self.colors}
+                "separator": self.separator, "colors": self.colors,
+                "agent_fields": list(self.agent_fields)}
 
 
 def config_path() -> Path:
@@ -50,6 +59,10 @@ def from_dict(data: Any) -> Config:
     for name in data.get("fields") or []:
         if name in FIELDS and name not in fields:
             fields.append(name)
+    agent_fields: List[str] = []
+    for name in data.get("agent_fields") or []:
+        if name in AGENT_FIELDS and name not in agent_fields:
+            agent_fields.append(name)
     separator = data.get("separator")
     colors = data.get("colors")
     return Config(
@@ -57,6 +70,7 @@ def from_dict(data: Any) -> Config:
         fields=fields or list(DEFAULT_FIELDS),
         separator=separator if isinstance(separator, str) else DEFAULT_SEPARATOR,
         colors=colors if isinstance(colors, bool) else True,
+        agent_fields=agent_fields or list(AGENT_FIELDS),
     )
 
 

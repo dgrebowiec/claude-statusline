@@ -10,8 +10,10 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from . import config as config_module
-from .config import DEFAULT_SEPARATOR, FIELD_DESCRIPTIONS, FIELDS, LEVELS, Config
+from .config import (AGENT_FIELD_DESCRIPTIONS, AGENT_FIELDS, DEFAULT_SEPARATOR, FIELD_DESCRIPTIONS,
+                     FIELDS, LEVELS, Config)
 from .render import preview
+from .subagent import panel_preview
 
 SEPARATOR_PRESETS = [" | ", " · ", " │ ", " / ", "  "]
 
@@ -20,6 +22,7 @@ KEY_HELP = ("↑↓ select   space show/hide   u/d move   ←→ level   "
 
 LINE_HELP = """commands:
   <n>        show or hide field n          u<n> / d<n>  move field n up / down
+  a<n>       the same for agent panel field n (ua<n> / da<n> to move it)
   l          cycle detail level            s            set separator
   c          colours on / off              r            reset to defaults
   w          save and exit                 q            quit without saving"""
@@ -30,9 +33,10 @@ DIM = "\033[2m"
 RESET = "\033[0m"
 
 
-def display_order(config: Config) -> List[str]:
+def display_order(config: Config, agent: bool = False) -> List[str]:
     """Enabled fields in their order first, then the disabled ones."""
-    return list(config.fields) + [name for name in FIELDS if name not in config.fields]
+    enabled, every = (config.agent_fields, AGENT_FIELDS) if agent else (config.fields, FIELDS)
+    return list(enabled) + [name for name in every if name not in enabled]
 
 
 class Editor:
@@ -41,7 +45,9 @@ class Editor:
     def __init__(self, config: Config):
         self.config = config
         # Stable order of all fields: toggling only flips the checkbox, u/d is what moves.
+        # The cursor runs over the main bar's fields, then over the agent panel's.
         self.order = display_order(config)
+        self.agent_order = display_order(config, agent=True)
         self.cursor = 0
         self.dirty = False
         self.message = ""
@@ -52,19 +58,34 @@ class Editor:
     def _changed(self) -> None:
         self.dirty = True
 
-    def _at(self, index: Optional[int]) -> str:
-        return self.order[self.cursor if index is None else index]
+    def _locate(self, index: Optional[int]):
+        """Cursor index -> (order, enabled names, setter of the enabled names, position)."""
+        index = self.cursor if index is None else index
+        if index < len(self.order):
+            return self.order, self.config.fields, self._set_fields, index
+        return (self.agent_order, self.config.agent_fields, self._set_agent_fields,
+                index - len(self.order))
 
-    def _sync(self, enabled: set) -> None:
+    def _set_fields(self, names: List[str]) -> None:
+        self.config.fields = names
+
+    def _set_agent_fields(self, names: List[str]) -> None:
+        self.config.agent_fields = names
+
+    def _total(self) -> int:
+        return len(self.order) + len(self.agent_order)
+
+    def _sync(self, order: List[str], enabled: set, setter: Callable[[List[str]], None]) -> None:
         """Enabled fields, in the editor's order, become the config's fields."""
-        self.config.fields = [name for name in self.order if name in enabled]
+        setter([name for name in order if name in enabled])
 
     def move_cursor(self, step: int) -> None:
-        self.cursor = (self.cursor + step) % len(FIELDS)
+        self.cursor = (self.cursor + step) % self._total()
 
     def toggle(self, index: Optional[int] = None) -> None:
-        name = self._at(index)
-        enabled = set(self.config.fields)
+        order, current, setter, position = self._locate(index)
+        name = order[position]
+        enabled = set(current)
         if name in enabled:
             if len(enabled) == 1:
                 self.message = "at least one field must stay on"
@@ -72,18 +93,19 @@ class Editor:
             enabled.remove(name)
         else:
             enabled.add(name)
-        self._sync(enabled)
+        self._sync(order, enabled, setter)
         self._changed()
 
     def move(self, step: int, index: Optional[int] = None) -> None:
-        name = self._at(index)
-        i = self.order.index(name)
+        order, current, setter, i = self._locate(index)
+        name = order[i]
         j = i + step
-        if 0 <= j < len(self.order):
-            self.order[i], self.order[j] = self.order[j], self.order[i]
-            self._sync(set(self.config.fields))
+        if 0 <= j < len(order):
+            order[i], order[j] = order[j], order[i]
+            self._sync(order, set(current), setter)
             self._changed()
-        self.cursor = self.order.index(name)
+        if index is None:
+            self.cursor += order.index(name) - i
 
     def cycle_level(self, step: int = 1) -> None:
         self.config.level = LEVELS[(LEVELS.index(self.config.level) + step) % len(LEVELS)]
@@ -107,7 +129,9 @@ class Editor:
         defaults = Config()
         self.config.level, self.config.fields = defaults.level, defaults.fields
         self.config.separator, self.config.colors = defaults.separator, defaults.colors
+        self.config.agent_fields = defaults.agent_fields
         self.order = display_order(self.config)
+        self.agent_order = display_order(self.config, agent=True)
         self.cursor = 0
         self._changed()
 
@@ -140,10 +164,23 @@ class Editor:
         }
         if key in actions:
             actions[key]()
-        elif key.isdigit() and 1 <= int(key) <= len(FIELDS):
-            self.cursor = int(key) - 1
+        elif key.isdigit() and 1 <= int(key) <= len(self._locate(None)[0]):
+            start = 0 if self.cursor < len(self.order) else len(self.order)
+            self.cursor = start + int(key) - 1
             self.toggle()
         return None
+
+    def _line_index(self, text: str) -> Optional[int]:
+        """'3' -> main bar field 3, 'a2' -> agent panel field 2, as cursor indexes."""
+        agent = text.startswith("a")
+        number = text[1:] if agent else text
+        if not number.isdigit():
+            return None
+        index = int(number) - 1
+        size = len(self.agent_order) if agent else len(self.order)
+        if not 0 <= index < size:
+            return None
+        return index + (len(self.order) if agent else 0)
 
     def handle_line(self, command: str, ask: Callable[[str], str]) -> Optional[str]:
         """One text command of the line-based editor. Returns 'save', 'quit' or None."""
@@ -160,18 +197,12 @@ class Editor:
             self.set_separator(ask("separator (empty = default): "))
         elif command == "r":
             self.reset()
-        elif command[:1] in ("u", "d") and command[1:].isdigit():
-            index = int(command[1:]) - 1
-            if not 0 <= index < len(FIELDS):
-                self.message = f"no field {command[1:]}"
-            else:
-                self.move(-1 if command[0] == "u" else 1, index)
-        elif command.isdigit():
-            index = int(command) - 1
-            if 0 <= index < len(FIELDS):
-                self.toggle(index)
-            else:
-                self.message = f"no field {command}"
+        elif command[:1] in ("u", "d") and self._line_index(command[1:]) is not None:
+            self.move(-1 if command[0] == "u" else 1, self._line_index(command[1:]))
+        elif self._line_index(command) is not None:
+            self.toggle(self._line_index(command))
+        elif command.lstrip("uda").isdigit():
+            self.message = f"no field {command.lstrip('uda')}"
         else:
             self.message = f"unknown command: {command!r}"
         return None
@@ -190,6 +221,14 @@ class Editor:
             row = f" {index + 1}. [{mark}] {name:<8} {FIELD_DESCRIPTIONS[name]}"
             row = row.ljust(min(width - 2, 60))
             lines.append(f" {REVERSE}{row}{RESET}" if index == self.cursor else f" {row}")
+        lines += ["", f"{BOLD}Agent panel{RESET}  {DIM}rows of running subagents below the prompt"
+                      f" (claude-statusline config --agent-panel on){RESET}"]
+        for index, name in enumerate(self.agent_order):
+            mark = "x" if name in cfg.agent_fields else " "
+            row = f" {index + 1}. [{mark}] {name:<8} {AGENT_FIELD_DESCRIPTIONS[name]}"
+            row = row.ljust(min(width - 2, 60))
+            at = len(self.order) + index == self.cursor
+            lines.append(f" {REVERSE}{row}{RESET}" if at else f" {row}")
         lines += [
             "",
             f"{BOLD}Level{RESET}      ◀ {cfg.level} ▶   {DIM}{' / '.join(LEVELS)}{RESET}",
@@ -198,6 +237,9 @@ class Editor:
             "",
             f"{BOLD}Preview{RESET}",
             "  " + preview(cfg),
+            "",
+            f"{BOLD}Agent panel preview{RESET}",
+            "  " + panel_preview(cfg, min(width - 4, 100)),
             "",
             f"{DIM}{KEY_HELP}{RESET}",
         ]
@@ -321,6 +363,10 @@ def show(editor: Editor, out: Callable[[str], None]) -> None:
     for index, name in enumerate(editor.order, start=1):
         mark = "x" if name in config.fields else " "
         out(f"  {index}. [{mark}] {name:<8} {FIELD_DESCRIPTIONS[name]}")
+    out("agent panel:  " + panel_preview(config))
+    for index, name in enumerate(editor.agent_order, start=1):
+        mark = "x" if name in config.agent_fields else " "
+        out(f"  a{index}. [{mark}] {name:<8} {AGENT_FIELD_DESCRIPTIONS[name]}")
     out("")
     out(LINE_HELP)
 

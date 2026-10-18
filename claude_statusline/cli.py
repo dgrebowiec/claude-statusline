@@ -17,7 +17,7 @@ from . import __version__
 from . import config as config_module
 from .config import FIELDS, LEVELS, Config
 from .configure import main as run_configure
-from .render import DEFAULT_CACHE_DIR, DEFAULT_PROJECTS_DIR, preview, render
+from .render import colours_enabled, DEFAULT_CACHE_DIR, DEFAULT_PROJECTS_DIR, preview, render
 from .subagent import subagent_lines
 from .settings import (MIN_REFRESH, default_settings_path, get_agent_panel, get_refresh, install,
                        set_agent_panel, set_refresh, uninstall)
@@ -153,7 +153,9 @@ def main(argv: Optional[List[str]] = None) -> None:
     elif args.command == "configure":
         run_configure()
     elif args.command == "subagent":
-        for line in subagent_lines(_read_stdin(), DEFAULT_PROJECTS_DIR, DEFAULT_CACHE_DIR):
+        settings = config_module.load()
+        for line in subagent_lines(_read_stdin(), DEFAULT_PROJECTS_DIR, DEFAULT_CACHE_DIR,
+                                   colors=colours_enabled(settings), config=settings):
             print(line)
     elif args.command == "preview":
         print(preview(config_module.load()))

@@ -4,6 +4,7 @@ One weighted token is one uncached input token of Opus 5. Anthropic does not pub
 formula behind subscription limits, so these ratios are a proxy, not an exact count.
 The table and weights match claude-token-report.
 """
+import re
 from typing import List, Mapping, Tuple
 
 W_WRITE_5M = 1.25
@@ -72,3 +73,12 @@ def weighted(usage: Mapping, model: str) -> float:
         + write_1h * price_in * W_WRITE_1H
         + (usage.get("output_tokens", 0) or 0) * price_out
     ) / REF_PRICE
+
+
+def display_model(model_id: str) -> str:
+    """claude-sonnet-5-5 -> Sonnet 5.5; ids that do not fit the pattern are returned as they are."""
+    match = re.fullmatch(r"claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?(?:\[\w+\])?", model_id or "")
+    if not match:
+        return model_id or "?"
+    family, major, minor = match.groups()
+    return f"{family.capitalize()} {major}" + (f".{minor}" if minor else "")

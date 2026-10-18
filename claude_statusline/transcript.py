@@ -48,3 +48,15 @@ def usage_record(line: str) -> Optional[Dict[str, Any]]:
         }
     except (ValueError, KeyError, TypeError, AttributeError):
         return None
+
+
+def last_model(path: str, lines: int = 200) -> Optional[str]:
+    """Model id of the last API call in a transcript, or None."""
+    try:
+        for line in reversed(tail_lines(path, lines)):
+            rec = usage_record(line)
+            if rec is not None:
+                return rec["model"]
+    except OSError:
+        pass
+    return None
