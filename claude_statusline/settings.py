@@ -58,13 +58,42 @@ def install(path: Path, command: Optional[str] = None) -> Optional[Path]:
     backup = _backup(path)
     old = data.get("statusLine")
     refresh = old.get("refreshInterval") if isinstance(old, dict) else None
-    command = command or default_command()
-    data["statusLine"] = {"type": "command", "command": command,
+    data["statusLine"] = {"type": "command", "command": command or default_command(),
                           "refreshInterval": refresh or DEFAULT_REFRESH}
-    if "subagentStatusLine" not in data or _is_ours(data["subagentStatusLine"]):
-        data["subagentStatusLine"] = {"type": "command", "command": f"{command} subagent"}
     _save(path, data)
     return backup
+
+
+def get_agent_panel(path: Path) -> bool:
+    """True when Claude Code's subagentStatusLine runs this tool."""
+    try:
+        return _is_ours(_load(path).get("subagentStatusLine"))
+    except (OSError, ValueError):
+        return False
+
+
+def set_agent_panel(path: Path, on: bool, command: Optional[str] = None) -> bool:
+    """Points subagentStatusLine at `claude-statusline subagent`, or removes it again.
+
+    Never touches a subagentStatusLine of another tool (raises ValueError when turning on).
+    Returns True when the file changed.
+    """
+    data = _load(path)
+    entry = data.get("subagentStatusLine")
+    if entry is not None and not _is_ours(entry):
+        if on:
+            raise ValueError("subagentStatusLine already points to another command")
+        return False
+    if on == (entry is not None):
+        return False
+    _backup(path)
+    if on:
+        data["subagentStatusLine"] = {"type": "command",
+                                      "command": f"{command or default_command()} subagent"}
+    else:
+        del data["subagentStatusLine"]
+    _save(path, data)
+    return True
 
 
 def get_refresh(path: Path) -> Optional[int]:

@@ -273,16 +273,21 @@ def test_render_shows_working_subagents(tmp_path):
     assert line.endswith("wykonawca: 5h ~44.5%")
     assert "agent:" not in line and "agent " not in line  # finished and stale ones are hidden
 
-def test_install_sets_subagent_line_but_keeps_a_foreign_one(tmp_path):
+def test_agent_panel_is_opt_in_and_keeps_a_foreign_one(tmp_path):
+    from claude_statusline.settings import get_agent_panel, set_agent_panel
     path = tmp_path / "settings.json"
     install(path, command="/x/claude-statusline")
+    assert get_agent_panel(path) is False  # install leaves the agent panel alone
+    assert set_agent_panel(path, True, command="/x/claude-statusline") is True
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["subagentStatusLine"]["command"] == "/x/claude-statusline subagent"
+    assert set_agent_panel(path, False) is True and get_agent_panel(path) is False
     assert uninstall(path) is True
-    assert "subagentStatusLine" not in json.loads(path.read_text(encoding="utf-8"))
     path.write_text(json.dumps({"subagentStatusLine": {"type": "command", "command": "other"}}),
                     encoding="utf-8")
-    install(path, command="/x/claude-statusline")
+    with pytest.raises(ValueError):
+        set_agent_panel(path, True)
+    assert set_agent_panel(path, False) is False
     assert json.loads(path.read_text(encoding="utf-8"))["subagentStatusLine"]["command"] == "other"
 
 

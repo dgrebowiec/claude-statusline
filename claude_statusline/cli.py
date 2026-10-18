@@ -19,8 +19,8 @@ from .config import FIELDS, LEVELS, Config
 from .configure import main as run_configure
 from .render import DEFAULT_CACHE_DIR, DEFAULT_PROJECTS_DIR, preview, render
 from .subagent import subagent_lines
-from .settings import (MIN_REFRESH, default_settings_path, get_refresh, install, set_refresh,
-                       uninstall)
+from .settings import (MIN_REFRESH, default_settings_path, get_agent_panel, get_refresh, install,
+                       set_agent_panel, set_refresh, uninstall)
 
 
 def _parse_fields(value: str) -> List[str]:
@@ -54,8 +54,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("preview", help="print a sample line with the current settings")
     sub.add_parser("subagent", help="share of the 5 h limit per subagent, for "
                                     "subagentStatusLine (JSON on stdin)")
-    sub.add_parser("install", help="set statusLine and subagentStatusLine in settings.json "
-                                   "(keeps a backup)")
+    sub.add_parser("install", help="set statusLine in settings.json (keeps a backup)")
     sub.add_parser("uninstall", help="remove the statusLine entry if it is ours")
 
     cfg = sub.add_parser("config", help="change options without the editor")
@@ -70,6 +69,10 @@ def _build_parser() -> argparse.ArgumentParser:
                           "Claude Code's own updates, so subagent work shows up while it "
                           "happens; 0 or off: only on Claude Code's updates. Stored as "
                           "statusLine.refreshInterval in ~/.claude/settings.json")
+    cfg.add_argument("--agent-panel", choices=["on", "off"],
+                     help="add each running subagent's 5 h share to its row in Claude Code's "
+                          "agent panel (subagentStatusLine). Claude Code then redraws those "
+                          "rows every 5 s instead of every second")
     cfg.add_argument("--show", action="store_true", help="print the current settings as JSON")
     cfg.add_argument("--reset", action="store_true", help="restore the defaults")
     return parser
@@ -85,9 +88,21 @@ def _refresh_command(seconds: int) -> None:
     print(f"status line refresh: {state} (saved to {path})")
 
 
+def _agent_panel_command(on: bool) -> None:
+    path = default_settings_path()
+    try:
+        set_agent_panel(path, on)
+    except ValueError as err:
+        sys.exit(f"claude-statusline: {err}")
+    print(f"agent panel: {'on' if on else 'off'} (saved to {path})")
+
+
 def _config_command(args: argparse.Namespace) -> None:
     if args.refresh is not None:
         _refresh_command(args.refresh)
+    if args.agent_panel:
+        _agent_panel_command(args.agent_panel == "on")
+    if args.refresh is not None or args.agent_panel:
         if not any((args.level, args.fields, args.separator is not None, args.colors,
                     args.reset, args.show)):
             return
@@ -114,6 +129,7 @@ def _config_command(args: argparse.Namespace) -> None:
         print(json.dumps(config.to_dict(), indent=2, ensure_ascii=False))
         refresh = get_refresh(default_settings_path())
         print(f"refresh: every {refresh} s" if refresh else "refresh: only on Claude Code's updates")
+        print(f"agent panel: {'on' if get_agent_panel(default_settings_path()) else 'off'}")
 
 
 def _read_stdin() -> Dict[str, Any]:

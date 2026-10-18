@@ -19,9 +19,10 @@ Haiku 5.5 | [##------------------] 12% (118k/1.0M) | cache 1h: until 16:30:26 | 
   at `5h: 50%`, `~20.7%` means 20.7 of those 50 points. A subagent counts as finished when its
   last reply ends its turn; one cut off without that is dropped after an hour without changes.
   Claude Code always sends the main thread's data, even when you view a subagent. Off by
-  default: the agent panel shows the same share.
-- **Agent panel:** each running subagent's share of the 5-hour limit at the end of its row in
-  Claude Code's own list of agents (below the prompt), through the `subagentStatusLine` setting.
+  default; the optional [agent panel](#agent-panel) shows the same share.
+- **Agent panel (optional):** each running subagent's share of the 5-hour limit at the end of
+  its row in Claude Code's own list of agents (below the prompt), through the
+  `subagentStatusLine` setting.
 
 It uses 0 tokens: it only reads local data and never calls the model.
 
@@ -59,6 +60,7 @@ Or set options directly:
 claude-statusline config --level minimal --fields model,context,5h,7d --separator " · "
 claude-statusline config --colors off
 claude-statusline config --refresh 5  # re-run every 5 s (at least 3); 0 or off: events only
+claude-statusline config --agent-panel on   # 5 h share in Claude Code's agent rows; off: remove
 claude-statusline config --show       # print current settings
 claude-statusline config --reset      # back to defaults
 claude-statusline preview             # print a sample line with the current settings
@@ -78,10 +80,11 @@ Detail levels:
 
 ### Agent panel
 
-`install` also sets `subagentStatusLine` to `claude-statusline subagent` (unless it already points
-to another tool). Claude Code runs it every 5 s while subagents are listed below the prompt and
-the row of each running subagent ends with its share of the 5-hour limit so far, in points of
-the whole limit:
+Optional, off by default: `claude-statusline config --agent-panel on` sets Claude Code's
+`subagentStatusLine` to `claude-statusline subagent` (`off` removes it; a `subagentStatusLine`
+of another tool is never touched). While subagents are listed below the prompt, the row of each
+running subagent then ends with its share of the 5-hour limit so far, in points of the whole
+limit:
 
 ```
 ◯ wykonawca  Compiling main, unit, androidTest sources     6m 13s · ↓ 82.3k tokens · 5h ~20.7%
@@ -89,7 +92,8 @@ the whole limit:
 
 Claude Code replaces the whole row with what the command returns, so the command redraws the
 name, description, run time and tokens the way Claude Code does and adds the share; finished
-subagents keep Claude Code's own row. That command gets no limit data from Claude Code, so it uses the last reading the
+subagents keep Claude Code's own row. The cost: Claude Code runs the command every 5 s (fixed,
+not configurable), so those rows, run time included, update every 5 s instead of every second. That command gets no limit data from Claude Code, so it uses the last reading the
 status line logged; it shows nothing until the status line has run once in the current window.
 
 ### Refresh interval
@@ -136,8 +140,8 @@ claude-statusline install
 ```
 
 `install` sets `statusLine` in `~/.claude/settings.json` (with a 10 s
-[refresh interval](#refresh-interval), or the one you already had) and `subagentStatusLine` for
-the [agent panel](#agent-panel), and keeps a backup of the file.
+[refresh interval](#refresh-interval), or the one you already had) and keeps a backup of the
+file. The [agent panel](#agent-panel) is turned on separately.
 Restart Claude Code or send a message to see it.
 
 Try it once without installing: `uvx --from git+https://github.com/dgrebowiec/claude-statusline claude-statusline preview`
