@@ -41,12 +41,14 @@ claude-statusline configure
 | `←` `→` | detail level: `minimal`, `normal`, `detailed` |
 | `s` / `S` | next separator preset / type your own |
 | `c` | colours on / off |
+| `a` (or `space` on its on/off row) | [agent panel](#agent-panel) on / off; its fields show only while it is on |
 | `r` | reset to defaults |
 | `enter` | save and exit |
 | `q` / `Esc` | quit (asks again if there are unsaved changes) |
 
 When the input is not a terminal (for example piped), it falls back to text commands, one per
-line: a number toggles a field, `u<n>` / `d<n>` moves one, `l` level, `s` separator, `c`
+line: a number toggles a field, `u<n>` / `d<n>` moves one, `a` agent panel on / off, `a<n>` toggles
+agent panel field n, `l` level, `s` separator, `c`
 colours, `r` reset, `w` save, `q` quit.
 
 Or set options directly:
@@ -65,7 +67,8 @@ Settings are stored in `~/.claude/claude-statusline.json` (override with the
 `CLAUDE_STATUSLINE_CONFIG` environment variable). Fields: `model`, `effort`, `context`, `cache`,
 `5h`, `7d`, `share` and `cacheio` (off by default; turn it on with
 `claude-statusline configure` or `--fields`). The agent panel has its own `agent_fields` (`time`,
-`tokens`, `model`, `cache`, `share`), set in its own section of `configure`. The order in `fields` is the order on the line.
+`tokens`, `model`, `effort`, `cache`, `share`), set in its own section of `configure`; as in the
+main line, `effort` sits next to the model, and on its own only when `model` is off. The order in `fields` is the order on the line.
 
 Detail levels:
 
@@ -76,7 +79,8 @@ Detail levels:
 
 ### Agent panel
 
-Optional, off by default: `claude-statusline config --agent-panel on` sets Claude Code's
+Optional, off by default: `claude-statusline config --agent-panel on` (or `a` in
+`claude-statusline configure`) sets Claude Code's
 `subagentStatusLine` to `claude-statusline subagent` (`off` removes it; a `subagentStatusLine`
 of another tool is never touched). While subagents are listed below the prompt, the row of each
 running subagent then ends with its share of the 5-hour limit so far, in points of the whole

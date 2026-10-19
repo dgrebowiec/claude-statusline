@@ -33,7 +33,8 @@ def test_configurator_toggle_move_level_and_save(tmp_path):
     path = tmp_path / "c.json"
     answers = iter(["1", "d1", "l", "w"])  # hide model, move it down, level, save
     out = []
-    saved = run(path, ask=lambda prompt: next(answers), out=out.append)
+    saved = run(path, ask=lambda prompt: next(answers), out=out.append,
+                settings_path=tmp_path / "settings.json")
     assert saved == path
     cfg = config_module.load(path)
     assert "model" not in cfg.fields
@@ -44,7 +45,8 @@ def test_configurator_toggle_move_level_and_save(tmp_path):
 def test_configurator_quit_does_not_save(tmp_path):
     path = tmp_path / "c.json"
     answers = iter(["1", "q"])
-    assert run(path, ask=lambda prompt: next(answers), out=lambda s: None) is None
+    assert run(path, ask=lambda prompt: next(answers), out=lambda s: None,
+               settings_path=tmp_path / "settings.json") is None
     assert not path.exists()
 
 

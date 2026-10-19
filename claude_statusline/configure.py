@@ -6,6 +6,7 @@ not a terminal (pipes, tests) it falls back to one text command per line.
 import copy
 import os
 import sys
+import textwrap
 from pathlib import Path
 from typing import Callable, List, Optional
 
@@ -13,16 +14,23 @@ from . import config as config_module
 from .config import (AGENT_FIELD_DESCRIPTIONS, AGENT_FIELDS, DEFAULT_SEPARATOR, FIELD_DESCRIPTIONS,
                      FIELDS, LEVELS, Config)
 from .render import preview
+from .settings import default_settings_path, get_agent_panel, set_agent_panel
 from .subagent import panel_preview
 
 SEPARATOR_PRESETS = [" | ", " · ", " │ ", " / ", "  "]
 
-KEY_HELP = ("↑↓ select   space show/hide   u/d move   ←→ level   "
-            "s separator   S custom separator   c colours   r reset   enter save   q quit")
+KEY_HELP = ("↑↓ select   space show/hide   u/d move   ←→ level   s separator   "
+            "S custom separator   c colours   a agent panel   r reset   enter save   q quit")
+
+# Why the agent panel costs smoothness; shown next to its on/off switch.
+AGENT_PANEL_NOTE = ("Claude Code runs this command on a fixed 5\u00a0s timer (not configurable) and the "
+                    "row it returns replaces Claude Code's own, so while it is on the agent rows, "
+                    "run time included, update every 5\u00a0s instead of every second.")
 
 LINE_HELP = """commands:
   <n>        show or hide field n          u<n> / d<n>  move field n up / down
-  a<n>       the same for agent panel field n (ua<n> / da<n> to move it)
+  a          agent panel on / off       a<n>         the same as <n> for agent panel
+                                          field n (ua<n> / da<n> to move it)
   l          cycle detail level            s            set separator
   c          colours on / off              r            reset to defaults
   w          save and exit                 q            quit without saving"""
@@ -42,10 +50,12 @@ def display_order(config: Config, agent: bool = False) -> List[str]:
 class Editor:
     """Editing state shared by the full-screen and the line-based front ends."""
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, agent_panel: bool = False):
         self.config = config
+        self.agent_panel = agent_panel  # subagentStatusLine in settings.json, not in config
         # Stable order of all fields: toggling only flips the checkbox, u/d is what moves.
-        # The cursor runs over the main bar's fields, then over the agent panel's.
+        # The cursor runs over the main bar's fields, the agent panel's on/off row (at
+        # len(order)), then the agent panel's fields while it is on.
         self.order = display_order(config)
         self.agent_order = display_order(config, agent=True)
         self.cursor = 0
@@ -64,7 +74,7 @@ class Editor:
         if index < len(self.order):
             return self.order, self.config.fields, self._set_fields, index
         return (self.agent_order, self.config.agent_fields, self._set_agent_fields,
-                index - len(self.order))
+                index - len(self.order) - 1)
 
     def _set_fields(self, names: List[str]) -> None:
         self.config.fields = names
@@ -73,7 +83,10 @@ class Editor:
         self.config.agent_fields = names
 
     def _total(self) -> int:
-        return len(self.order) + len(self.agent_order)
+        return len(self.order) + 1 + (len(self.agent_order) if self.agent_panel else 0)
+
+    def _on_switch(self, index: Optional[int]) -> bool:
+        return index is None and self.cursor == len(self.order)
 
     def _sync(self, order: List[str], enabled: set, setter: Callable[[List[str]], None]) -> None:
         """Enabled fields, in the editor's order, become the config's fields."""
@@ -83,6 +96,9 @@ class Editor:
         self.cursor = (self.cursor + step) % self._total()
 
     def toggle(self, index: Optional[int] = None) -> None:
+        if self._on_switch(index):
+            self.toggle_agent_panel()
+            return
         order, current, setter, position = self._locate(index)
         name = order[position]
         enabled = set(current)
@@ -97,6 +113,8 @@ class Editor:
         self._changed()
 
     def move(self, step: int, index: Optional[int] = None) -> None:
+        if self._on_switch(index):
+            return
         order, current, setter, i = self._locate(index)
         name = order[i]
         j = i + step
@@ -123,6 +141,12 @@ class Editor:
 
     def toggle_colors(self) -> None:
         self.config.colors = not self.config.colors
+        self._changed()
+
+    def toggle_agent_panel(self) -> None:
+        self.agent_panel = not self.agent_panel
+        if self.cursor >= self._total():  # its rows are hidden now
+            self.cursor = len(self.order)
         self._changed()
 
     def reset(self) -> None:
@@ -160,12 +184,13 @@ class Editor:
             "s": self.next_separator,
             "S": lambda: self.set_separator(ask("separator (empty = default): ")),
             "c": self.toggle_colors,
+            "a": self.toggle_agent_panel,
             "r": self.reset,
         }
         if key in actions:
             actions[key]()
         elif key.isdigit() and 1 <= int(key) <= len(self._locate(None)[0]):
-            start = 0 if self.cursor < len(self.order) else len(self.order)
+            start = 0 if self.cursor <= len(self.order) else len(self.order) + 1
             self.cursor = start + int(key) - 1
             self.toggle()
         return None
@@ -174,13 +199,13 @@ class Editor:
         """'3' -> main bar field 3, 'a2' -> agent panel field 2, as cursor indexes."""
         agent = text.startswith("a")
         number = text[1:] if agent else text
-        if not number.isdigit():
+        if not number.isdigit() or (agent and not self.agent_panel):
             return None
         index = int(number) - 1
         size = len(self.agent_order) if agent else len(self.order)
         if not 0 <= index < size:
             return None
-        return index + (len(self.order) if agent else 0)
+        return index + (len(self.order) + 1 if agent else 0)
 
     def handle_line(self, command: str, ask: Callable[[str], str]) -> Optional[str]:
         """One text command of the line-based editor. Returns 'save', 'quit' or None."""
@@ -197,6 +222,8 @@ class Editor:
             self.set_separator(ask("separator (empty = default): "))
         elif command == "r":
             self.reset()
+        elif command == "a":
+            self.toggle_agent_panel()
         elif command[:1] in ("u", "d") and self._line_index(command[1:]) is not None:
             self.move(-1 if command[0] == "u" else 1, self._line_index(command[1:]))
         elif self._line_index(command) is not None:
@@ -222,12 +249,17 @@ class Editor:
             row = row.ljust(min(width - 2, 60))
             lines.append(f" {REVERSE}{row}{RESET}" if index == self.cursor else f" {row}")
         lines += ["", f"{BOLD}Agent panel{RESET}  {DIM}rows of running subagents below the prompt"
-                      f" (claude-statusline config --agent-panel on){RESET}"]
-        for index, name in enumerate(self.agent_order):
+                      f"   space or a: on/off{RESET}"]
+        mark = "x" if self.agent_panel else " "
+        row = f"    [{mark}] {'on' if self.agent_panel else 'off'}".ljust(min(width - 2, 60))
+        at = self.cursor == len(self.order)
+        lines.append(f" {REVERSE}{row}{RESET}" if at else f" {row}")
+        lines += [f"  {DIM}{part}{RESET}" for part in wrap(AGENT_PANEL_NOTE, min(width - 4, 96))]
+        for index, name in enumerate(self.agent_order if self.agent_panel else []):
             mark = "x" if name in cfg.agent_fields else " "
             row = f" {index + 1}. [{mark}] {name:<8} {AGENT_FIELD_DESCRIPTIONS[name]}"
             row = row.ljust(min(width - 2, 60))
-            at = len(self.order) + index == self.cursor
+            at = len(self.order) + 1 + index == self.cursor
             lines.append(f" {REVERSE}{row}{RESET}" if at else f" {row}")
         lines += [
             "",
@@ -238,14 +270,31 @@ class Editor:
             f"{BOLD}Preview{RESET}",
             "  " + preview(cfg),
             "",
-            f"{BOLD}Agent panel preview{RESET}",
-            "  " + panel_preview(cfg, min(width - 4, 100)),
-            "",
-            f"{DIM}{KEY_HELP}{RESET}",
         ]
+        if self.agent_panel:
+            lines += [f"{BOLD}Agent panel preview{RESET}",
+                      "  " + panel_preview(cfg, min(width - 4, 100)), ""]
+        lines += [f"{DIM}{KEY_HELP}{RESET}"]
         if self.message:
             lines.append(f"{BOLD}{self.message}{RESET}")
         return lines
+
+
+def wrap(text: str, width: int) -> List[str]:
+    return textwrap.wrap(text, max(width, 20))
+
+
+def save(editor: Editor, path: Path, settings_path: Path, out: Callable[[str], None]) -> Path:
+    """Writes the config, and the agent panel switch to settings.json when it changed."""
+    saved = config_module.save(editor.config, path)
+    out(f"saved to {saved}")
+    if editor.agent_panel != get_agent_panel(settings_path):
+        try:
+            set_agent_panel(settings_path, editor.agent_panel)
+            out(f"agent panel: {'on' if editor.agent_panel else 'off'} (saved to {settings_path})")
+        except ValueError as err:
+            out(f"agent panel not changed: {err}")
+    return saved
 
 
 # --- terminal handling ---
@@ -329,11 +378,17 @@ class Terminal:
                 tty.setcbreak(self._fd)
 
 
-def run_tui(path: Optional[Path] = None) -> Optional[Path]:
+def _editor(path: Path, settings_path: Path) -> Editor:
+    return Editor(copy.deepcopy(config_module.load(path)), get_agent_panel(settings_path))
+
+
+def run_tui(path: Optional[Path] = None,
+            settings_path: Optional[Path] = None) -> Optional[Path]:
     """Full-screen editor. Returns the path it saved to, or None when the user quit."""
     import shutil
     path = path or config_module.config_path()
-    editor = Editor(copy.deepcopy(config_module.load(path)))
+    settings_path = settings_path or default_settings_path()
+    editor = _editor(path, settings_path)
     result = None
     with Terminal() as term:
         try:
@@ -343,9 +398,7 @@ def run_tui(path: Optional[Path] = None) -> Optional[Path]:
         except KeyboardInterrupt:
             result = "quit"
     if result == "save":
-        saved = config_module.save(editor.config, path)
-        print(f"saved to {saved}")
-        return saved
+        return save(editor, path, settings_path, print)
     print("not saved")
     return None
 
@@ -363,7 +416,14 @@ def show(editor: Editor, out: Callable[[str], None]) -> None:
     for index, name in enumerate(editor.order, start=1):
         mark = "x" if name in config.fields else " "
         out(f"  {index}. [{mark}] {name:<8} {FIELD_DESCRIPTIONS[name]}")
-    out("agent panel:  " + panel_preview(config))
+    out(f"agent panel: {'on' if editor.agent_panel else 'off'} (a: on/off)")
+    for part in wrap(AGENT_PANEL_NOTE, 96):
+        out("  " + part)
+    if not editor.agent_panel:
+        out("")
+        out(LINE_HELP)
+        return
+    out("  " + panel_preview(config))
     for index, name in enumerate(editor.agent_order, start=1):
         mark = "x" if name in config.agent_fields else " "
         out(f"  a{index}. [{mark}] {name:<8} {AGENT_FIELD_DESCRIPTIONS[name]}")
@@ -382,10 +442,12 @@ def apply(config: Config, command: str, ask: Callable[[str], str],
 
 
 def run(path: Optional[Path] = None, ask: Callable[[str], str] = input,
-        out: Callable[[str], None] = print) -> Optional[Path]:
+        out: Callable[[str], None] = print,
+        settings_path: Optional[Path] = None) -> Optional[Path]:
     """Line-based editor. Returns the path it saved to, or None when the user quit."""
     path = path or config_module.config_path()
-    editor = Editor(copy.deepcopy(config_module.load(path)))
+    settings_path = settings_path or default_settings_path()
+    editor = _editor(path, settings_path)
     while True:
         show(editor, out)
         try:
@@ -396,9 +458,7 @@ def run(path: Optional[Path] = None, ask: Callable[[str], str] = input,
         if editor.message:
             out(editor.message)
         if result == "save":
-            saved = config_module.save(editor.config, path)
-            out(f"saved to {saved}")
-            return saved
+            return save(editor, path, settings_path, out)
         if result == "quit":
             out("not saved")
             return None

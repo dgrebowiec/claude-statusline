@@ -16,11 +16,12 @@ FIELD_DESCRIPTIONS = {
     "share": "this session's share of the limits",
     "cacheio": "tokens read from and written to the cache by the last call",
 }
-AGENT_FIELDS = ("time", "tokens", "model", "cache", "share")
+AGENT_FIELDS = ("time", "tokens", "model", "effort", "cache", "share")
 AGENT_FIELD_DESCRIPTIONS = {
     "time": "how long the subagent has been working",
     "tokens": "tokens the subagent has used",
-    "model": "model name and effort",
+    "model": "model name",
+    "effort": "effort level",
     "cache": "prompt cache tier and expiry time",
     "share": "its share of the 5-hour limit",
 }

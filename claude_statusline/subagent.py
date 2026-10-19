@@ -67,10 +67,14 @@ def right_part(fields: List[str], now: float, started: Optional[float], tokens: 
                model_id: Optional[str], effort: Optional[str],
                cache: Optional[Tuple[str, float]], share: float, colors: bool) -> str:
     """The chosen pieces of a row's right part, in the configured order."""
+    # Effort sits next to the model, as in the main status line; on its own only without it.
+    with_model = "model" in fields and model_id
     pieces = {
         "time": fmt_elapsed(now - started) if started else None,
         "tokens": f"↓ {fmt_count(tokens)} tokens" if tokens else None,
-        "model": model_text(model_id, effort, colors),
+        "model": model_text(model_id, effort if "effort" in fields else None, colors),
+        "effort": (paint(f"effort: {effort}", "effort", colors)
+                   if effort and not with_model else None),
         "cache": cache_short(cache, now, colors) if cache else None,
         "share": paint(f"5h ~{share:.1f}%", "share", colors),
     }

@@ -268,16 +268,6 @@ def cache_short(status: Tuple[str, float], now: float, on: bool) -> str:
     return head + paint(f"until {clock}", f"tier_{tier}", on)
 
 
-def model_text(model_id: Optional[str], effort: Optional[str], on: bool) -> Optional[str]:
-    """Model name and, when known, its effort, painted as in the main status line."""
-    if not model_id:
-        return None
-    text = paint(display_model(model_id), "model", on)
-    if effort:
-        text += " " + paint(f"(effort: {effort})", "effort", on)
-    return text
-
-
 def cache_short(status: Tuple[str, float], now: float, on: bool) -> str:
     """cache 5m until 14:03:22 / cache 5m expired 14:03:22, for rows that are short on room."""
     tier, expires_at = status

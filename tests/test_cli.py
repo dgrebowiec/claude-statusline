@@ -297,16 +297,42 @@ def test_subagent_row_cuts_the_description_to_fit():
 def test_agent_panel_fields_choose_and_order_the_right_part():
     from claude_statusline.subagent import right_part
     args = (NOW, NOW - 60, 2000, "claude-sonnet-5-5", "high", ("5m", NOW + 60), 1.5, False)
-    assert right_part(["share", "model"], *args) == "5h ~1.5% · Sonnet 5.5 (effort: high)"
+    assert right_part(["share", "model"], *args) == "5h ~1.5% · Sonnet 5.5"
     assert right_part(["time", "tokens"], *args) == "1m 0s · ↓ 2.0k tokens"
+    assert right_part(["model", "effort"], *args) == "Sonnet 5.5 (effort: high)"
+    assert right_part(["effort", "share"], *args) == "effort: high · 5h ~1.5%"
+
+
+def test_configurator_hides_agent_panel_fields_while_it_is_off():
+    from claude_statusline.configure import Editor
+    editor = Editor(Config())
+    assert editor._total() == len(editor.order) + 1
+    assert not any("Agent panel preview" in line for line in editor.screen(120))
+    assert any("fixed 5\u00a0s timer" in line for line in editor.screen(120))
+    assert editor.handle_line("a1", input) is None and editor.message == "no field 1"
+    editor.cursor = len(editor.order)  # the on/off row
+    editor.handle_key("space", input)
+    assert editor.agent_panel and editor._total() == len(editor.order) + 1 + len(editor.agent_order)
+    editor.cursor = editor._total() - 1
+    editor.handle_key("a", input)
+    assert not editor.agent_panel and editor.cursor == len(editor.order)
+
+
+def test_configurator_saves_the_agent_panel_switch(tmp_path):
+    from claude_statusline.configure import run
+    settings = tmp_path / "settings.json"
+    answers = iter(["a", "w"])
+    run(tmp_path / "c.json", ask=lambda prompt: next(answers), out=lambda s: None,
+        settings_path=settings)
+    assert "subagent" in json.loads(settings.read_text(encoding="utf-8"))["subagentStatusLine"]["command"]
 
 
 def test_configurator_edits_agent_panel_fields_separately():
     from claude_statusline.configure import Editor
-    editor = Editor(Config())
-    editor.cursor = len(editor.order)  # first agent panel row
+    editor = Editor(Config(), agent_panel=True)
+    editor.cursor = len(editor.order) + 1  # first agent panel row, below its on/off row
     editor.toggle()
     assert "time" not in editor.config.agent_fields and "model" in editor.config.fields
     editor.move(1)
-    assert editor.agent_order[:2] == ["tokens", "time"] and editor.cursor == len(editor.order) + 1
+    assert editor.agent_order[:2] == ["tokens", "time"] and editor.cursor == len(editor.order) + 2
     assert any("Agent panel preview" in line for line in editor.screen(120))
