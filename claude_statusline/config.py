@@ -1,9 +1,11 @@
-"""User settings: detail level, which fields to show and in what order, separator, colours."""
+"""User settings: detail level, which fields to show and in what order, theme, separator, colours."""
 import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from .themes import BAR_NAMES, DEFAULT_BAR, DEFAULT_THEME, THEME_NAMES
 
 FIELDS = ("model", "effort", "context", "cache", "5h", "7d", "share", "cacheio")
 FIELD_DESCRIPTIONS = {
@@ -37,9 +39,11 @@ class Config:
     separator: str = DEFAULT_SEPARATOR
     colors: bool = True
     agent_fields: List[str] = field(default_factory=lambda: list(AGENT_FIELDS))
+    theme: str = DEFAULT_THEME
+    bar: str = DEFAULT_BAR
 
     def to_dict(self) -> Dict[str, Any]:
-        return {"level": self.level, "fields": list(self.fields),
+        return {"level": self.level, "fields": list(self.fields), "theme": self.theme, "bar": self.bar,
                 "separator": self.separator, "colors": self.colors,
                 "agent_fields": list(self.agent_fields)}
 
@@ -66,12 +70,15 @@ def from_dict(data: Any) -> Config:
             agent_fields.append(name)
     separator = data.get("separator")
     colors = data.get("colors")
+    theme = data.get("theme")
     return Config(
         level=level if level in LEVELS else "normal",
         fields=fields or list(DEFAULT_FIELDS),
         separator=separator if isinstance(separator, str) else DEFAULT_SEPARATOR,
         colors=colors if isinstance(colors, bool) else True,
         agent_fields=agent_fields or list(AGENT_FIELDS),
+        theme=theme if theme in THEME_NAMES else DEFAULT_THEME,
+        bar=data.get("bar") if data.get("bar") in BAR_NAMES else DEFAULT_BAR,
     )
 
 

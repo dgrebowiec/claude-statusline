@@ -19,6 +19,7 @@ from .config import FIELDS, LEVELS, Config
 from .configure import main as run_configure
 from .render import colours_enabled, DEFAULT_CACHE_DIR, DEFAULT_PROJECTS_DIR, preview, render
 from .subagent import subagent_lines
+from .themes import BAR_NAMES, THEME_NAMES
 from .settings import (MIN_REFRESH, default_settings_path, get_agent_panel, get_refresh, install,
                        set_agent_panel, set_refresh, uninstall)
 
@@ -62,7 +63,13 @@ def _build_parser() -> argparse.ArgumentParser:
     cfg.add_argument("--fields", type=_parse_fields,
                      help="comma-separated fields in display order, e.g. model,context,5h,7d; "
                           f"available: {', '.join(FIELDS)}")
-    cfg.add_argument("--separator", help='text between fields, e.g. " · "')
+    cfg.add_argument("--theme", choices=THEME_NAMES,
+                     help="how fields are drawn: plain text, filled blocks (blocks, slant, fade) "
+                          "or coloured borders (boxes)")
+    cfg.add_argument("--bar", choices=BAR_NAMES,
+                     help="style of the context progress bar (auto: ascii on plain, bricks on "
+                          "the filled themes)")
+    cfg.add_argument("--separator", help='text between fields (plain theme), e.g. " · "')
     cfg.add_argument("--colors", choices=["on", "off"])
     cfg.add_argument("--refresh", type=_parse_refresh, metavar="SECONDS",
                      help=f"re-run the status line every SECONDS (at least {MIN_REFRESH}) besides "
@@ -103,7 +110,7 @@ def _config_command(args: argparse.Namespace) -> None:
     if args.agent_panel:
         _agent_panel_command(args.agent_panel == "on")
     if args.refresh is not None or args.agent_panel:
-        if not any((args.level, args.fields, args.separator is not None, args.colors,
+        if not any((args.level, args.fields, args.theme, args.bar, args.separator is not None, args.colors,
                     args.reset, args.show)):
             return
     path = config_module.config_path()
@@ -116,6 +123,10 @@ def _config_command(args: argparse.Namespace) -> None:
         config.level, changed = args.level, True
     if args.fields:
         config.fields, changed = args.fields, True
+    if args.theme:
+        config.theme, changed = args.theme, True
+    if args.bar:
+        config.bar, changed = args.bar, True
     if args.separator is not None:
         config.separator, changed = args.separator, True
     if args.colors:

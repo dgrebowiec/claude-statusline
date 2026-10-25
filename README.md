@@ -8,7 +8,7 @@ Haiku 5.5 | [##------------------] 12% (118k/1.0M) | cache 1h: until 16:30:26 | 
 ```
 
 - **Model and effort:** model name and the effort level (`effort: high` etc.) when Claude Code reports it.
-- **Context:** share of the window used, tokens used / window size, warnings at 70% and 85%.
+- **Context:** share of the window used, tokens used / window size, warnings at 50% and 75%.
 - **Prompt cache:** tier of the last cache write (`5m` or `1h`) and time until it expires.
 - **Cache reads and writes (optional `cacheio` field):** tokens read from and written to the
   prompt cache by the last API call, e.g. `cache read 118k, write 4k`.
@@ -21,13 +21,14 @@ Haiku 5.5 | [##------------------] 12% (118k/1.0M) | cache 1h: until 16:30:26 | 
 
 It uses 0 tokens: it only reads local data and never calls the model.
 
-Colours: model bold cyan, effort bold bright magenta; context and limit percentages green below 70%, yellow below 85%,
+Colours: model bold cyan, effort bold bright magenta; context and limit percentages green below 50%, yellow below 75%,
 red above; cache tier blue for `1h`, magenta for `5m`; session share italic cyan; the rest dim.
 Set `NO_COLOR=1` to turn colours off.
 
 ## Configure
 
-Run the interactive editor. It shows a live preview at the bottom after every change:
+Run the interactive editor. It shows a live preview at the top after every change; below it are
+sections for fields, [themes](#themes), appearance (level, separator, colours) and the agent panel:
 
 ```bash
 claude-statusline configure
@@ -35,10 +36,12 @@ claude-statusline configure
 
 | Key | Action |
 | --- | --- |
-| `↑` `↓` (or `k` `j`) | select a field |
-| `space` (or a digit `1`-`8`) | show / hide the field |
+| `↑` `↓` (or `k` `j`) | select a row |
+| `space` (or a digit `1`-`8`) | show / hide the field, pick the theme, change the setting |
 | `u` `d` (or `Shift+↑` `Shift+↓`) | move the field up / down (hidden fields too; space never moves a row) |
-| `←` `→` | detail level: `minimal`, `normal`, `detailed` |
+| `←` `→` | previous / next value of the selected theme or setting; on field rows the detail level (`minimal`, `normal`, `detailed`) |
+| `t` | next theme |
+| `l` | next detail level |
 | `s` / `S` | next separator preset / type your own |
 | `c` | colours on / off |
 | `a` (or `space` on its on/off row) | [agent panel](#agent-panel) on / off; its fields show only while it is on |
@@ -48,7 +51,7 @@ claude-statusline configure
 
 When the input is not a terminal (for example piped), it falls back to text commands, one per
 line: a number toggles a field, `u<n>` / `d<n>` moves one, `a` agent panel on / off, `a<n>` toggles
-agent panel field n, `l` level, `s` separator, `c`
+agent panel field n, `t` next theme, `t<n>` theme n, `l` level, `s` separator, `c`
 colours, `r` reset, `w` save, `q` quit.
 
 Or set options directly:
@@ -56,6 +59,7 @@ Or set options directly:
 ```bash
 claude-statusline config --level minimal --fields model,context,5h,7d --separator " · "
 claude-statusline config --colors off
+claude-statusline config --theme slant   # see Themes below
 claude-statusline config --refresh 5  # re-run every 5 s (at least 3); 0 or off: events only
 claude-statusline config --agent-panel on   # 5 h share in Claude Code's agent rows; off: remove
 claude-statusline config --show       # print current settings
@@ -76,6 +80,36 @@ Detail levels:
 - `normal`: the default shown at the top of this page.
 - `detailed`: adds tokens left in the context, the cache TTL, weekday of the reset, and the
   session's weighted tokens next to its share. The `cacheio` field shows exact token counts.
+
+### Themes
+
+A theme sets how the fields are drawn (`--theme` or the Theme section of `configure`, which shows
+a sample of each):
+
+| Theme | Look |
+| --- | --- |
+| `plain` (default) | coloured text, fields split by the separator |
+| `blocks` | each field a filled block, gaps between them |
+| `slant` | filled blocks joined by slanted edges ◤ |
+| `fade` | filled blocks fading into each other ▓▒░ |
+| `boxes` | coloured frame `╭─╮ │ │ ╰─╯` around each field: three rows |
+
+Filled themes colour the block by state: context and limits green / orange / red at the same
+thresholds as the text, cache blue (`1h`), magenta (`5m`) or grey (expired). The shapes are
+standard Unicode characters, so no Nerd Font is needed.
+The context bar has its own style (`--bar`, the Progress bar section of `configure`, key `b`):
+
+| Bar | Look |
+| --- | --- |
+| `auto` (default) | `ascii` on `plain` / `boxes`, `bricks` on the filled themes |
+| `ascii` | `[########------------]` |
+| `bricks` | `▮▮▮▮▮▮▮▮▯▯▯▯▯▯▯▯▯▯▯▯` |
+| `dots` | `●●●●●●●●○○○○○○○○○○○○` |
+| `blocks` | `████████░░░░░░░░░░░░` |
+| `line` | `━━━━━━━━╌╌╌╌╌╌╌╌╌╌╌╌` |
+
+The separator is used by `plain` only. With colours off the filled themes fall back to `plain`.
+The agent panel keeps its own plain rows.
 
 ### Agent panel
 

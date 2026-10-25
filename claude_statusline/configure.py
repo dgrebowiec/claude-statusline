@@ -8,7 +8,7 @@ import os
 import sys
 import textwrap
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 from . import config as config_module
 from .config import (AGENT_FIELD_DESCRIPTIONS, AGENT_FIELDS, DEFAULT_SEPARATOR, FIELD_DESCRIPTIONS,
@@ -16,19 +16,25 @@ from .config import (AGENT_FIELD_DESCRIPTIONS, AGENT_FIELDS, DEFAULT_SEPARATOR, 
 from .render import preview
 from .settings import default_settings_path, get_agent_panel, set_agent_panel
 from .subagent import panel_preview
+from .themes import BAR_NAMES, THEME_NAMES, THEMES
 
 SEPARATOR_PRESETS = [" | ", " · ", " │ ", " / ", "  "]
 
-KEY_HELP = ("↑↓ select   space show/hide   u/d move   ←→ level   s separator   "
-            "S custom separator   c colours   a agent panel   r reset   enter save   q quit")
+KEY_HELP = [
+    "↑↓ select   space show/hide, pick or switch   ←→ change value   u/d move field",
+    "t next theme   b next bar   l level   s/S separator   c colours   a agent panel   r reset",
+    "enter save   q quit",
+]
 
 # Why the agent panel costs smoothness; shown next to its on/off switch.
-AGENT_PANEL_NOTE = ("Claude Code runs this command on a fixed 5\u00a0s timer (not configurable) and the "
+AGENT_PANEL_NOTE = ("Claude Code runs this command on a fixed 5 s timer (not configurable) and the "
                     "row it returns replaces Claude Code's own, so while it is on the agent rows, "
-                    "run time included, update every 5\u00a0s instead of every second.")
+                    "run time included, update every 5 s instead of every second.")
 
 LINE_HELP = """commands:
   <n>        show or hide field n          u<n> / d<n>  move field n up / down
+  t          next theme                    t<n>         pick theme n
+  b          next bar style                b<n>         pick bar style n
   a          agent panel on / off       a<n>         the same as <n> for agent panel
                                           field n (ua<n> / da<n> to move it)
   l          cycle detail level            s            set separator
@@ -39,12 +45,45 @@ REVERSE = "\033[7m"
 BOLD = "\033[1m"
 DIM = "\033[2m"
 RESET = "\033[0m"
+HEADING = "\033[1;36m"
+ON = "\033[32m"
+
+# Fields of the small sample shown next to every theme.
+THEME_SAMPLE_FIELDS = ["model", "context", "5h", "7d"]
+
+Row = Tuple[str, object]  # (kind, key): field / theme / bar / level / separator / colors / agent / agent_field
 
 
 def display_order(config: Config, agent: bool = False) -> List[str]:
     """Enabled fields in their order first, then the disabled ones."""
     enabled, every = (config.agent_fields, AGENT_FIELDS) if agent else (config.fields, FIELDS)
     return list(enabled) + [name for name in every if name not in enabled]
+
+
+def highlight(text: str) -> str:
+    """Reverse video that survives the colour resets inside `text`."""
+    return REVERSE + text.replace(RESET, RESET + REVERSE) + RESET
+
+
+def heading(title: str, hint: str, width: int) -> str:
+    rule = "─" * max(2, min(width, 72) - len(title) - len(hint) - 6)
+    return f"{HEADING}── {title} {rule}{RESET} {DIM}{hint}{RESET}"
+
+
+def theme_sample(config: Config, name: str) -> str:
+    """One row of the theme `name`, for its entry in the theme list."""
+    sample = Config(level="minimal", fields=list(THEME_SAMPLE_FIELDS), theme=name,
+                    separator=config.separator, colors=config.colors)
+    lines = preview(sample).split("\n")
+    return lines[len(lines) // 2]
+
+
+def bar_sample(config: Config, name: str) -> str:
+    """The context field drawn with bar style `name` in the current theme."""
+    sample = Config(level="normal", fields=["context"], theme=config.theme, bar=name,
+                    separator=config.separator, colors=config.colors)
+    lines = preview(sample).split("\n")
+    return lines[len(lines) // 2].split(" (")[0] + RESET  # the cut-off tail held the reset
 
 
 class Editor:
@@ -54,14 +93,34 @@ class Editor:
         self.config = config
         self.agent_panel = agent_panel  # subagentStatusLine in settings.json, not in config
         # Stable order of all fields: toggling only flips the checkbox, u/d is what moves.
-        # The cursor runs over the main bar's fields, the agent panel's on/off row (at
-        # len(order)), then the agent panel's fields while it is on.
         self.order = display_order(config)
         self.agent_order = display_order(config, agent=True)
-        self.cursor = 0
+        self.cursor = 0  # index into rows()
         self.dirty = False
         self.message = ""
         self._quit_armed = False
+
+    # --- rows the cursor runs over ---
+
+    def rows(self) -> List[Row]:
+        """Fields, themes, appearance settings, the agent panel switch and, while it is on,
+        the agent panel's fields."""
+        rows: List[Row] = [("field", i) for i in range(len(self.order))]
+        rows += [("theme", name) for name in THEME_NAMES]
+        rows += [("bar", name) for name in BAR_NAMES]
+        rows += [("level", None)]
+        if self.config.theme == "plain":  # the other themes draw their own joints
+            rows.append(("separator", None))
+        rows += [("colors", None), ("agent", None)]
+        if self.agent_panel:
+            rows += [("agent_field", i) for i in range(len(self.agent_order))]
+        return rows
+
+    def row_index(self, kind: str, key: object = None) -> int:
+        return self.rows().index((kind, key))
+
+    def current(self) -> Row:
+        return self.rows()[self.cursor]
 
     # --- operations ---
 
@@ -69,12 +128,13 @@ class Editor:
         self.dirty = True
 
     def _locate(self, index: Optional[int]):
-        """Cursor index -> (order, enabled names, setter of the enabled names, position)."""
-        index = self.cursor if index is None else index
-        if index < len(self.order):
-            return self.order, self.config.fields, self._set_fields, index
-        return (self.agent_order, self.config.agent_fields, self._set_agent_fields,
-                index - len(self.order) - 1)
+        """Row index of a field -> (order, enabled names, setter of the enabled names, position)."""
+        kind, position = self.rows()[self.cursor if index is None else index]
+        if kind == "field":
+            return self.order, self.config.fields, self._set_fields, position
+        if kind == "agent_field":
+            return self.agent_order, self.config.agent_fields, self._set_agent_fields, position
+        return None
 
     def _set_fields(self, names: List[str]) -> None:
         self.config.fields = names
@@ -83,10 +143,7 @@ class Editor:
         self.config.agent_fields = names
 
     def _total(self) -> int:
-        return len(self.order) + 1 + (len(self.agent_order) if self.agent_panel else 0)
-
-    def _on_switch(self, index: Optional[int]) -> bool:
-        return index is None and self.cursor == len(self.order)
+        return len(self.rows())
 
     def _sync(self, order: List[str], enabled: set, setter: Callable[[List[str]], None]) -> None:
         """Enabled fields, in the editor's order, become the config's fields."""
@@ -95,11 +152,52 @@ class Editor:
     def move_cursor(self, step: int) -> None:
         self.cursor = (self.cursor + step) % self._total()
 
-    def toggle(self, index: Optional[int] = None) -> None:
-        if self._on_switch(index):
+    def activate(self) -> None:
+        """Space on the current row: show/hide a field, pick a theme, change a setting."""
+        kind, key = self.current()
+        if kind in ("field", "agent_field"):
+            self.toggle()
+        elif kind == "theme":
+            self.set_theme(str(key))
+        elif kind == "bar":
+            self.set_bar(str(key))
+        elif kind == "level":
+            self.cycle_level(1)
+        elif kind == "separator":
+            self.next_separator()
+        elif kind == "colors":
+            self.toggle_colors()
+        elif kind == "agent":
             self.toggle_agent_panel()
+
+    def change(self, step: int) -> None:
+        """←→ on the current row: the previous / next value of a setting or theme.
+
+        On field rows it changes the detail level, the setting that matters most there.
+        """
+        kind, _ = self.current()
+        if kind == "theme":
+            self.cycle_theme(step)
+            self.cursor = self.row_index("theme", self.config.theme)
+        elif kind == "bar":
+            self.cycle_bar(step)
+            self.cursor = self.row_index("bar", self.config.bar)
+        elif kind == "separator":
+            self.next_separator(step)
+        elif kind == "colors":
+            self.toggle_colors()
+        elif kind == "agent":
+            self.toggle_agent_panel()
+        else:
+            self.cycle_level(step)
+
+    def toggle(self, index: Optional[int] = None) -> None:
+        located = self._locate(index)
+        if located is None:
+            if index is None:
+                self.activate()
             return
-        order, current, setter, position = self._locate(index)
+        order, current, setter, position = located
         name = order[position]
         enabled = set(current)
         if name in enabled:
@@ -113,9 +211,10 @@ class Editor:
         self._changed()
 
     def move(self, step: int, index: Optional[int] = None) -> None:
-        if self._on_switch(index):
+        located = self._locate(index)
+        if located is None:
             return
-        order, current, setter, i = self._locate(index)
+        order, current, setter, i = located
         name = order[i]
         j = i + step
         if 0 <= j < len(order):
@@ -129,10 +228,31 @@ class Editor:
         self.config.level = LEVELS[(LEVELS.index(self.config.level) + step) % len(LEVELS)]
         self._changed()
 
-    def next_separator(self) -> None:
+    def set_theme(self, name: str) -> None:
+        if name != self.config.theme:
+            here = self.current()
+            self.config.theme = name
+            rows = self.rows()  # the separator row exists for the plain theme only
+            self.cursor = rows.index(here) if here in rows else min(self.cursor, len(rows) - 1)
+            self._changed()
+
+    def set_bar(self, name: str) -> None:
+        if name != self.config.bar:
+            self.config.bar = name
+            self._changed()
+
+    def cycle_bar(self, step: int = 1) -> None:
+        index = BAR_NAMES.index(self.config.bar) if self.config.bar in BAR_NAMES else 0
+        self.set_bar(BAR_NAMES[(index + step) % len(BAR_NAMES)])
+
+    def cycle_theme(self, step: int = 1) -> None:
+        index = THEME_NAMES.index(self.config.theme) if self.config.theme in THEME_NAMES else 0
+        self.set_theme(THEME_NAMES[(index + step) % len(THEME_NAMES)])
+
+    def next_separator(self, step: int = 1) -> None:
         current = self.config.separator
         index = SEPARATOR_PRESETS.index(current) if current in SEPARATOR_PRESETS else -1
-        self.config.separator = SEPARATOR_PRESETS[(index + 1) % len(SEPARATOR_PRESETS)]
+        self.config.separator = SEPARATOR_PRESETS[(index + step) % len(SEPARATOR_PRESETS)]
         self._changed()
 
     def set_separator(self, text: str) -> None:
@@ -146,14 +266,15 @@ class Editor:
     def toggle_agent_panel(self) -> None:
         self.agent_panel = not self.agent_panel
         if self.cursor >= self._total():  # its rows are hidden now
-            self.cursor = len(self.order)
+            self.cursor = self.row_index("agent")
         self._changed()
 
     def reset(self) -> None:
         defaults = Config()
         self.config.level, self.config.fields = defaults.level, defaults.fields
         self.config.separator, self.config.colors = defaults.separator, defaults.colors
-        self.config.agent_fields = defaults.agent_fields
+        self.config.agent_fields, self.config.theme = defaults.agent_fields, defaults.theme
+        self.config.bar = defaults.bar
         self.order = display_order(self.config)
         self.agent_order = display_order(self.config, agent=True)
         self.cursor = 0
@@ -176,11 +297,13 @@ class Editor:
         actions = {
             "up": lambda: self.move_cursor(-1), "k": lambda: self.move_cursor(-1),
             "down": lambda: self.move_cursor(1), "j": lambda: self.move_cursor(1),
-            "space": self.toggle, "x": self.toggle,
+            "space": self.activate, "x": self.activate,
             "u": lambda: self.move(-1), "shift-up": lambda: self.move(-1),
             "d": lambda: self.move(1), "shift-down": lambda: self.move(1),
-            "left": lambda: self.cycle_level(-1), "right": lambda: self.cycle_level(1),
+            "left": lambda: self.change(-1), "right": lambda: self.change(1),
             "l": lambda: self.cycle_level(1),
+            "t": lambda: self.cycle_theme(1),
+            "b": lambda: self.cycle_bar(1),
             "s": self.next_separator,
             "S": lambda: self.set_separator(ask("separator (empty = default): ")),
             "c": self.toggle_colors,
@@ -189,14 +312,16 @@ class Editor:
         }
         if key in actions:
             actions[key]()
-        elif key.isdigit() and 1 <= int(key) <= len(self._locate(None)[0]):
-            start = 0 if self.cursor <= len(self.order) else len(self.order) + 1
-            self.cursor = start + int(key) - 1
-            self.toggle()
+        elif key.isdigit():
+            agent = self.current()[0] == "agent_field"
+            size = len(self.agent_order) if agent else len(self.order)
+            if 1 <= int(key) <= size:
+                self.cursor = self.row_index("agent_field" if agent else "field", int(key) - 1)
+                self.toggle()
         return None
 
     def _line_index(self, text: str) -> Optional[int]:
-        """'3' -> main bar field 3, 'a2' -> agent panel field 2, as cursor indexes."""
+        """'3' -> main bar field 3, 'a2' -> agent panel field 2, as row indexes."""
         agent = text.startswith("a")
         number = text[1:] if agent else text
         if not number.isdigit() or (agent and not self.agent_panel):
@@ -205,7 +330,7 @@ class Editor:
         size = len(self.agent_order) if agent else len(self.order)
         if not 0 <= index < size:
             return None
-        return index + (len(self.order) + 1 if agent else 0)
+        return self.row_index("agent_field" if agent else "field", index)
 
     def handle_line(self, command: str, ask: Callable[[str], str]) -> Optional[str]:
         """One text command of the line-based editor. Returns 'save', 'quit' or None."""
@@ -224,6 +349,22 @@ class Editor:
             self.reset()
         elif command == "a":
             self.toggle_agent_panel()
+        elif command == "t":
+            self.cycle_theme(1)
+        elif command == "b":
+            self.cycle_bar(1)
+        elif command[:1] == "b" and command[1:].isdigit():
+            number = int(command[1:])
+            if 1 <= number <= len(BAR_NAMES):
+                self.set_bar(BAR_NAMES[number - 1])
+            else:
+                self.message = f"no bar style {number}"
+        elif command[:1] == "t" and command[1:].isdigit():
+            number = int(command[1:])
+            if 1 <= number <= len(THEME_NAMES):
+                self.set_theme(THEME_NAMES[number - 1])
+            else:
+                self.message = f"no theme {number}"
         elif command[:1] in ("u", "d") and self._line_index(command[1:]) is not None:
             self.move(-1 if command[0] == "u" else 1, self._line_index(command[1:]))
         elif self._line_index(command) is not None:
@@ -236,48 +377,106 @@ class Editor:
 
     # --- output ---
 
-    def screen(self, width: int) -> List[str]:
-        """Lines of the full-screen editor."""
+    def _row(self, index: int, label: str, extra: str = "") -> str:
+        """A selectable row: ▸ and reverse video under the cursor; `extra` stays unmarked."""
+        if index == self.cursor:
+            return f" {BOLD}▸{RESET} " + highlight(label) + extra
+        return "   " + label + extra
+
+    def _field_row(self, index: int, number: int, name: str, on: bool, description: str,
+                   width: int) -> str:
+        mark = f"{ON}●{RESET}" if on else f"{DIM}○{RESET}"
+        text = f"{name:<8} {description}"
+        text = text[: max(width - 12, 20)]
+        body = f"{BOLD}{text[:8]}{RESET}{text[8:]}" if on else f"{DIM}{text}{RESET}"
+        return self._row(index, f"{number:>2} {mark} {body}")
+
+    def layout(self, width: int) -> Tuple[List[str], List[str], List[str], int]:
+        """(header, body, footer, line of the cursor in body) of the full-screen editor."""
         cfg = self.config
         title = f"{BOLD}claude-statusline configure{RESET}"
         if self.dirty:
             title += f"  {DIM}(unsaved changes){RESET}"
-        lines = [title, "", f"{BOLD}Fields{RESET}  {DIM}space: show/hide   u/d: move{RESET}"]
-        for index, name in enumerate(self.order):
-            mark = "x" if name in cfg.fields else " "
-            row = f" {index + 1}. [{mark}] {name:<8} {FIELD_DESCRIPTIONS[name]}"
-            row = row.ljust(min(width - 2, 60))
-            lines.append(f" {REVERSE}{row}{RESET}" if index == self.cursor else f" {row}")
-        lines += ["", f"{BOLD}Agent panel{RESET}  {DIM}rows of running subagents below the prompt"
-                      f"   space or a: on/off{RESET}"]
-        mark = "x" if self.agent_panel else " "
-        row = f"    [{mark}] {'on' if self.agent_panel else 'off'}".ljust(min(width - 2, 60))
-        at = self.cursor == len(self.order)
-        lines.append(f" {REVERSE}{row}{RESET}" if at else f" {row}")
-        lines += [f"  {DIM}{part}{RESET}" for part in wrap(AGENT_PANEL_NOTE, min(width - 4, 96))]
-        for index, name in enumerate(self.agent_order if self.agent_panel else []):
-            mark = "x" if name in cfg.agent_fields else " "
-            row = f" {index + 1}. [{mark}] {name:<8} {AGENT_FIELD_DESCRIPTIONS[name]}"
-            row = row.ljust(min(width - 2, 60))
-            at = len(self.order) + 1 + index == self.cursor
-            lines.append(f" {REVERSE}{row}{RESET}" if at else f" {row}")
-        lines += [
-            "",
-            f"{BOLD}Level{RESET}      ◀ {cfg.level} ▶   {DIM}{' / '.join(LEVELS)}{RESET}",
-            f"{BOLD}Separator{RESET}  {cfg.separator!r}",
-            f"{BOLD}Colours{RESET}    {'on' if cfg.colors else 'off'}",
-            "",
-            f"{BOLD}Preview{RESET}",
-            "  " + preview(cfg),
-            "",
-        ]
+        header = [title, "", f"{BOLD}Preview{RESET}"]
+        header += ["  " + line for line in preview(cfg).split("\n")]
         if self.agent_panel:
-            lines += [f"{BOLD}Agent panel preview{RESET}",
-                      "  " + panel_preview(cfg, min(width - 4, 100)), ""]
-        lines += [f"{DIM}{KEY_HELP}{RESET}"]
+            header += [f"{BOLD}Agent panel preview{RESET}",
+                       "  " + panel_preview(cfg, min(width - 4, 100))]
+        header.append("")
+
+        body: List[str] = []
+        cursor_line = 0
+        rows = self.rows()
+
+        def add(index: int, line: str) -> None:
+            nonlocal cursor_line
+            if index == self.cursor:
+                cursor_line = len(body)
+            body.append(line)
+
+        body.append(heading("Fields", "space show/hide · u/d move", width))
+        for i, name in enumerate(self.order):
+            add(rows.index(("field", i)), self._field_row(
+                rows.index(("field", i)), i + 1, name, name in cfg.fields,
+                FIELD_DESCRIPTIONS[name], width))
+
+        body += ["", heading("Theme", "space pick · ←→ / t next", width)]
+        for name in THEME_NAMES:
+            index = rows.index(("theme", name))
+            mark = f"{ON}◉{RESET}" if name == cfg.theme else f"{DIM}○{RESET}"
+            label = f"{mark} {BOLD if name == cfg.theme else ''}{name:<10}{RESET}"
+            add(index, self._row(index, label, "  " + theme_sample(cfg, name)))
+        shown = self.current()[1] if self.current()[0] == "theme" else cfg.theme
+        theme = THEMES[str(shown)]
+        note = theme.description
+        body.append(f"     {DIM}{shown}: {note}{RESET}")
+
+        body += ["", heading("Progress bar", "space pick · ←→ / b next", width)]
+        for name in BAR_NAMES:
+            index = rows.index(("bar", name))
+            mark = f"{ON}◉{RESET}" if name == cfg.bar else f"{DIM}○{RESET}"
+            label = f"{mark} {BOLD if name == cfg.bar else ''}{name:<10}{RESET}"
+            add(index, self._row(index, label, "  " + bar_sample(cfg, name)))
+
+        body += ["", heading("Appearance", "space or ←→ change", width)]
+        level = f"◀ {cfg.level} ▶   {DIM}{' / '.join(LEVELS)}{RESET}"
+        separator = f"{cfg.separator!r}   {DIM}S: type your own{RESET}"
+        colours = f"{ON}● on{RESET}" if cfg.colors else f"{DIM}○ off{RESET}"
+        for kind, label, value in (("level", "Level", level), ("separator", "Separator", separator),
+                                   ("colors", "Colours", colours)):
+            if (kind, None) not in rows:
+                continue
+            index = rows.index((kind, None))
+            add(index, self._row(index, f"{label:<10}", " " + value))
+
+        body += ["", heading("Agent panel", "rows of running subagents · space or a on/off", width)]
+        index = rows.index(("agent", None))
+        switch = f"{ON}● on{RESET}" if self.agent_panel else f"{DIM}○ off{RESET}"
+        add(index, self._row(index, switch))
+        body += [f"     {DIM}{part}{RESET}" for part in wrap(AGENT_PANEL_NOTE, min(width - 6, 90))]
+        for i, name in enumerate(self.agent_order if self.agent_panel else []):
+            index = rows.index(("agent_field", i))
+            add(index, self._field_row(index, i + 1, name, name in cfg.agent_fields,
+                                       AGENT_FIELD_DESCRIPTIONS[name], width))
+
+        footer = [""] + [f"{DIM}{line}{RESET}" for line in KEY_HELP]
         if self.message:
-            lines.append(f"{BOLD}{self.message}{RESET}")
-        return lines
+            footer.append(f"{BOLD}{self.message}{RESET}")
+        return header, body, footer, cursor_line
+
+    def screen(self, width: int, height: Optional[int] = None) -> List[str]:
+        """Lines of the full-screen editor; the list scrolls to keep the cursor in view."""
+        header, body, footer, cursor_line = self.layout(width)
+        if height is None or len(header) + len(body) + len(footer) <= height:
+            return header + body + footer
+        room = max(3, height - len(header) - len(footer))
+        top = min(max(0, cursor_line - room // 2), len(body) - room)
+        visible = body[top:top + room]
+        if top > 0:
+            visible[0] = f"   {DIM}▲ more{RESET}"
+        if top + room < len(body):
+            visible[-1] = f"   {DIM}▼ more{RESET}"
+        return header + visible + footer
 
 
 def wrap(text: str, width: int) -> List[str]:
@@ -393,7 +592,8 @@ def run_tui(path: Optional[Path] = None,
     with Terminal() as term:
         try:
             while result is None:
-                term.draw(editor.screen(shutil.get_terminal_size().columns))
+                size = shutil.get_terminal_size()
+                term.draw(editor.screen(size.columns, size.lines - 1))
                 result = editor.handle_key(term.read_key(), term.ask)
         except KeyboardInterrupt:
             result = "quit"
@@ -409,10 +609,19 @@ def show(editor: Editor, out: Callable[[str], None]) -> None:
     config = editor.config
     out("")
     out("preview:")
-    out("  " + preview(config))
+    for line in preview(config).split("\n"):
+        out("  " + line)
     out("")
     out(f"level: {config.level}   colours: {'on' if config.colors else 'off'}"
         f"   separator: {config.separator!r}")
+    out(f"bar: {config.bar}")
+    out("bar styles (b<n> to pick): " + "  ".join(f"b{i}={n}" for i, n in enumerate(BAR_NAMES, 1)))
+    out("themes (t<n> to pick):")
+    for index, name in enumerate(THEME_NAMES, start=1):
+        mark = "o" if name == config.theme else " "
+        theme = THEMES[name]
+        out(f"  t{index}. ({mark}) {name:<10} {theme.description}")
+    out("fields:")
     for index, name in enumerate(editor.order, start=1):
         mark = "x" if name in config.fields else " "
         out(f"  {index}. [{mark}] {name:<8} {FIELD_DESCRIPTIONS[name]}")

@@ -43,9 +43,9 @@ def test_render_context_and_no_transcript(tmp_path):
 
 
 def test_render_thresholds(tmp_path):
-    assert "! high" in _render(tmp_path, _payload(pct=75))
-    assert "FULL" in _render(tmp_path, _payload(pct=90))
-    assert "high" not in _render(tmp_path, _payload(pct=10))
+    assert "! high" in _render(tmp_path, _payload(pct=60))
+    assert "FULL" in _render(tmp_path, _payload(pct=80))
+    assert "high" not in _render(tmp_path, _payload(pct=40))
 
 
 def test_render_shows_effort_next_to_model(tmp_path):
@@ -306,16 +306,17 @@ def test_agent_panel_fields_choose_and_order_the_right_part():
 def test_configurator_hides_agent_panel_fields_while_it_is_off():
     from claude_statusline.configure import Editor
     editor = Editor(Config())
-    assert editor._total() == len(editor.order) + 1
+    switch = editor.row_index("agent")
+    assert editor._total() == switch + 1  # the on/off row is the last one
     assert not any("Agent panel preview" in line for line in editor.screen(120))
     assert any("fixed 5\u00a0s timer" in line for line in editor.screen(120))
     assert editor.handle_line("a1", input) is None and editor.message == "no field 1"
-    editor.cursor = len(editor.order)  # the on/off row
+    editor.cursor = switch
     editor.handle_key("space", input)
-    assert editor.agent_panel and editor._total() == len(editor.order) + 1 + len(editor.agent_order)
+    assert editor.agent_panel and editor._total() == switch + 1 + len(editor.agent_order)
     editor.cursor = editor._total() - 1
     editor.handle_key("a", input)
-    assert not editor.agent_panel and editor.cursor == len(editor.order)
+    assert not editor.agent_panel and editor.cursor == switch
 
 
 def test_configurator_saves_the_agent_panel_switch(tmp_path):
@@ -330,9 +331,10 @@ def test_configurator_saves_the_agent_panel_switch(tmp_path):
 def test_configurator_edits_agent_panel_fields_separately():
     from claude_statusline.configure import Editor
     editor = Editor(Config(), agent_panel=True)
-    editor.cursor = len(editor.order) + 1  # first agent panel row, below its on/off row
+    first = editor.row_index("agent") + 1  # first agent panel row, below its on/off row
+    editor.cursor = first
     editor.toggle()
     assert "time" not in editor.config.agent_fields and "model" in editor.config.fields
     editor.move(1)
-    assert editor.agent_order[:2] == ["tokens", "time"] and editor.cursor == len(editor.order) + 2
+    assert editor.agent_order[:2] == ["tokens", "time"] and editor.cursor == first + 1
     assert any("Agent panel preview" in line for line in editor.screen(120))

@@ -178,3 +178,99 @@ def test_editor_screen_shows_preview_and_cursor():
     lines = editor.screen(100)
     assert any("Opus 5.5" in line for line in lines)
     assert any("\033[7m" in line for line in lines)  # highlighted row
+
+
+# --- themes ---
+
+from claude_statusline.render import preview  # noqa: E402
+from claude_statusline.themes import THEME_NAMES, visible_len  # noqa: E402
+
+
+def test_unknown_theme_falls_back_to_plain():
+    assert from_dict({"theme": "neon"}).theme == "plain"
+    assert from_dict({"theme": "arrows"}).theme == "plain"  # a removed theme
+    assert from_dict({"theme": "slant"}).theme == "slant"
+
+
+def test_every_theme_renders_and_keeps_the_text():
+    for name in THEME_NAMES:
+        line = preview(Config(theme=name))
+        assert "Opus 5.5" in line and "5h" in line, name
+
+
+def test_filled_themes_colour_the_background_by_state():
+    line = preview(Config(theme="blocks"))
+    assert "\033[48;5;214" in line  # 5h at 72%: orange block
+    assert "\033[48;5;160" in line  # 7d at 96%: red block
+    assert "\033[32m" not in line   # text inside the blocks is not coloured on its own
+
+
+def test_filled_themes_fall_back_to_plain_without_colours():
+    line = preview(Config(theme="slant", colors=False))
+    assert "\033[" not in line and " | " in line and "" not in line
+
+
+def test_boxes_draw_three_rows_of_equal_width():
+    rows = preview(Config(theme="boxes", colors=False)).split("\n")
+    assert len(rows) == 3 and rows[0].startswith("╭") and rows[2].startswith("╰")
+    assert len({visible_len(row) for row in rows}) == 1
+
+
+def test_editor_picks_themes_with_space_arrows_and_t():
+    editor = Editor(Config())
+    editor.cursor = editor.row_index("theme", "slant")
+    _press(editor, "space")
+    assert editor.config.theme == "slant"
+    _press(editor, "right")
+    assert editor.config.theme == "fade" and editor.current() == ("theme", "fade")
+    _press(editor, "t")
+    assert editor.config.theme == "boxes"
+    assert editor.handle_line("t1", input) is None and editor.config.theme == "plain"
+    assert editor.handle_line("t99", input) is None and editor.message == "no theme 99"
+
+
+def test_separator_row_only_in_plain_theme():
+    editor = Editor(Config())
+    assert ("separator", None) in editor.rows()
+    editor.cursor = editor.row_index("colors")
+    editor.set_theme("slant")
+    assert ("separator", None) not in editor.rows() and editor.current() == ("colors", None)
+    assert "Separator" not in "\n".join(editor.screen(100))
+
+
+def test_progress_bar_styles():
+    line = preview(Config(theme="blocks", fields=["context"], colors=True))
+    assert "▮" in line and "▯" in line and "[" not in line.replace("\033[", "")
+    line = preview(Config(theme="blocks", fields=["context"], colors=True, bar="dots"))
+    assert "●" in line and "○" in line
+    line = preview(Config(theme="plain", fields=["context"], colors=False))
+    assert "[" in line and "#" in line
+    line = preview(Config(theme="plain", fields=["context"], colors=False, bar="line"))
+    assert "━" in line and "[" not in line
+    assert from_dict({"bar": "nope"}).bar == "auto" and from_dict({"bar": "dots"}).bar == "dots"
+    editor = Editor(Config())
+    editor.cursor = editor.row_index("bar", "line")
+    _press(editor, "space")
+    assert editor.config.bar == "line"
+    _press(editor, "b")
+    assert editor.config.bar == "auto"
+    assert editor.handle_line("b3", input) is None and editor.config.bar == "bricks"
+
+
+def test_editor_appearance_rows_change_with_arrows():
+    editor = Editor(Config())
+    editor.cursor = editor.row_index("separator")
+    _press(editor, "right")
+    assert editor.config.separator == " · "
+    editor.cursor = editor.row_index("colors")
+    _press(editor, "space")
+    assert editor.config.colors is False
+
+
+def test_editor_screen_scrolls_to_keep_the_cursor_in_view():
+    editor = Editor(Config(), agent_panel=True)
+    editor.cursor = editor._total() - 1
+    lines = editor.screen(100, 30)
+    assert len(lines) <= 30
+    assert any("▲ more" in line for line in lines)
+    assert any("▸" in line for line in lines)

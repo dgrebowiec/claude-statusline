@@ -1,12 +1,13 @@
 """Builds the one-line status from the JSON Claude Code passes on stdin."""
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from . import config as config_module
+from . import themes
 from .cache import cache_status, last_cache_io
 from .config import Config
 from .samples import Samples
@@ -51,10 +52,10 @@ def paint(text: str, style: str, enabled: bool) -> str:
 
 
 def level(pct: float) -> str:
-    """Traffic-light style for usage: green below 70%, yellow below 85%, red above."""
-    if pct >= 85:
+    """Traffic-light style for usage: green below 50%, yellow below 75%, red above."""
+    if pct >= 75:
         return "bad"
-    if pct >= 70:
+    if pct >= 50:
         return "warn"
     return "ok"
 
@@ -119,6 +120,13 @@ class Frame:
     sources: Sources
     transcript: Optional[str]
     on: bool
+    _cache: Any = field(default=False, repr=False)  # False: not read yet
+
+    def cache(self) -> Optional[Tuple[str, float]]:
+        """Cache tier and expiry of the transcript, read once per render."""
+        if self._cache is False:
+            self._cache = self.sources.cache(self.transcript) if self.transcript else None
+        return self._cache
 
 
 def _model(f: Frame) -> str:
@@ -145,6 +153,19 @@ def _effort(f: Frame) -> Optional[str]:
     return paint(text, "effort", f.on) if text else None
 
 
+def progress_bar(config: Config, filled: int) -> str:
+    """The context bar in the configured style; on the filled themes the empty cells are dimmed."""
+    on_block = colours_enabled(config) and themes.THEMES.get(config.theme, themes.THEMES["plain"]).filled
+    name = config.bar if config.bar in themes.BARS else themes.DEFAULT_BAR
+    if name == "auto":
+        name = "bricks" if on_block else "ascii"
+    full, empty, before, after = themes.BARS[name]
+    rest = empty * (BAR_WIDTH - filled)
+    if on_block and rest:
+        rest = f"\033[2m{rest}\033[22m"
+    return before + full * filled + rest + after
+
+
 def _context(f: Frame) -> str:
     context = f.payload.get("context_window") or {}
     pct = context.get("used_percentage")
@@ -155,8 +176,7 @@ def _context(f: Frame) -> str:
     if f.config.level == "minimal":
         return paint(f"{pct_int}%", style, f.on)
     filled = min(pct_int * BAR_WIDTH // 100, BAR_WIDTH)
-    bar = "#" * filled + "-" * (BAR_WIDTH - filled)
-    out = paint(f"[{bar}] {pct_int}%", style, f.on)
+    out = paint(f"{progress_bar(f.config, filled)} {pct_int}%", style, f.on)
     tokens = context.get("total_input_tokens")
     size = context.get("context_window_size")
     if tokens is not None and size is not None:
@@ -172,7 +192,7 @@ def _context(f: Frame) -> str:
 
 
 def _cache(f: Frame) -> str:
-    status = f.sources.cache(f.transcript) if f.transcript else None
+    status = f.cache()
     if status is None:
         return "cache: " + paint("none", "dim", f.on)
     tier, expires_at = status
@@ -268,16 +288,6 @@ def cache_short(status: Tuple[str, float], now: float, on: bool) -> str:
     return head + paint(f"until {clock}", f"tier_{tier}", on)
 
 
-def cache_short(status: Tuple[str, float], now: float, on: bool) -> str:
-    """cache 5m until 14:03:22 / cache 5m expired 14:03:22, for rows that are short on room."""
-    tier, expires_at = status
-    clock = datetime.fromtimestamp(expires_at).strftime("%H:%M:%S")
-    head = "cache " + paint(tier, f"tier_{tier}", on) + " "
-    if expires_at <= now:
-        return head + paint(f"expired {clock}", "expired", on)
-    return head + paint(f"until {clock}", f"tier_{tier}", on)
-
-
 def model_text(model_id: Optional[str], effort: Optional[str], on: bool) -> Optional[str]:
     """Model name and, when known, its effort, painted as in the main status line."""
     if not model_id:
@@ -300,16 +310,41 @@ BUILDERS: Dict[str, Callable[[Frame], Optional[str]]] = {
 }
 
 
+def _used(f: Frame, name: str) -> Optional[float]:
+    if name == "context":
+        return (f.payload.get("context_window") or {}).get("used_percentage")
+    key = LIMITS[name][0]
+    return ((f.payload.get("rate_limits") or {}).get(key) or {}).get("used_percentage")
+
+
+def tone(name: str, f: Frame) -> str:
+    """The colour group of a field's segment, for themes: the state where there is one."""
+    if name in ("context", "5h", "7d"):
+        used = _used(f, name)
+        return "none" if used is None else level(float(used))
+    if name == "cache":
+        status = f.cache()
+        if status is None:
+            return "none"
+        return "expired" if status[1] <= f.now else f"tier_{status[0]}"
+    return name
+
+
 def build(payload: Dict[str, Any], now: float, config: Config, sources: Sources) -> str:
     on = colours_enabled(config)
     transcript = payload.get("transcript_path") or None
     if transcript and not sources.has_transcript(transcript):
         transcript = None
     sources.observe_limits(payload, now)
-    frame = Frame(payload, now, config, sources, transcript, on)
-    parts: List[str] = [text for text in (BUILDERS[name](frame) for name in config.fields)
-                        if text]
-    return paint(config.separator, "sep", on).join(parts)
+    # Filled themes draw the text plainly: the segment's background carries its colour.
+    filled = on and themes.THEMES.get(config.theme, themes.THEMES["plain"]).filled
+    frame = Frame(payload, now, config, sources, transcript, on and not filled)
+    segments = []
+    for name in config.fields:
+        text = BUILDERS[name](frame)
+        if text:
+            segments.append((text, tone(name, frame)))
+    return themes.join(segments, config.theme, on, paint(config.separator, "sep", on))
 
 
 def render(payload: Dict[str, Any], now: Optional[float] = None,
