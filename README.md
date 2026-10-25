@@ -31,8 +31,11 @@ Run the interactive editor. It shows a live preview at the top after every chang
 sections for fields, [themes](#themes), appearance (level, separator, colours) and the agent panel:
 
 ```bash
-claude-statusline configure
+claude-statusline configure   # or just: claude-statusline
 ```
+
+Typed in a terminal with no input piped in, plain `claude-statusline` opens the editor too (Claude Code
+always pipes its JSON in, so the status line itself is unaffected).
 
 | Key | Action |
 | --- | --- |

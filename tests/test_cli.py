@@ -338,3 +338,12 @@ def test_configurator_edits_agent_panel_fields_separately():
     editor.move(1)
     assert editor.agent_order[:2] == ["tokens", "time"] and editor.cursor == first + 1
     assert any("Agent panel preview" in line for line in editor.screen(120))
+
+
+def test_bare_command_in_a_terminal_opens_the_configurator(monkeypatch):
+    opened = []
+    monkeypatch.setattr(cli, "run_configure", lambda: opened.append(True))
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: True)
+    cli.main([])
+    assert opened

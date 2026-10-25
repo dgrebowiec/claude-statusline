@@ -1,6 +1,6 @@
 """Command line entry point.
 
-    claude-statusline                 read Claude Code's JSON on stdin, print the status line
+    claude-statusline                 in a terminal: the editor; with JSON on stdin: print the status line
     claude-statusline configure       interactive editor with a live preview
     claude-statusline config ...      set options directly (see --help)
     claude-statusline preview         print a sample line with the current settings
@@ -160,7 +160,10 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     if args.command is None:
-        print(_render_stdin())
+        if sys.stdin.isatty() and sys.stdout.isatty():
+            run_configure()  # typed by hand: Claude Code always pipes its JSON in
+        else:
+            print(_render_stdin())
     elif args.command == "configure":
         run_configure()
     elif args.command == "subagent":
