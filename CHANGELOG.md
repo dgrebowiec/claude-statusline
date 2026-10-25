@@ -1,9 +1,7 @@
 # Changelog
 
-## 1.3.0
-- Plain `claude-statusline` typed in a terminal opens the configurator (Claude Code pipes its JSON in, so the status line is unaffected).
-
 ## 1.2.0
+- Plain `claude-statusline` typed in a terminal opens the configurator (Claude Code pipes its JSON in, so the status line is unaffected).
 - Themes (`plain`, `blocks`, `slant`, `fade`, `boxes`) and progress bar styles (`--theme`, `--bar`).
 - Redesigned configurator with sections for fields, themes, appearance and the agent panel.
 
