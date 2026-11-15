@@ -8,21 +8,27 @@ Haiku 5.5 | [##------------------] 12% (118k/1.0M) | cache 1h: until 16:30:26 | 
 ```
 
 - **Model and effort:** model name and the effort level (`effort: high` etc.) when Claude Code reports it.
+- **Skill:** the skill invoked last in this session (`skill: plan-tracker`), by Claude or as a
+  `/command`; read from the transcript, hidden until one is used.
 - **Context:** share of the window used, tokens used / window size, warnings at 50% and 75%.
 - **Prompt cache:** tier of the last cache write (`5m` or `1h`) and time until it expires.
 - **Cache reads and writes (optional `cacheio` field):** tokens read from and written to the
   prompt cache by the last API call, e.g. `cache read 118k, write 4k`.
+- **Agents (optional `agents` field):** each subagent still at work on a row of its own below
+  the status line: its type and task, model and effort, last skill and run time. Off by default.
 - **Plan limits:** 5-hour and 7-day usage with time until reset, from Claude Code's own data.
 - **Session share:** estimate of how much of each limit this session used.
-- **Agent panel (optional):** each running subagent's model, effort, prompt cache and share of the
+- **Agent panel (optional, Claude Code before 2.1.325 only):** each running subagent's model, effort, last skill, prompt cache and share of the
   5-hour limit at the end of its row in Claude Code's own list of agents (below the prompt),
   through the `subagentStatusLine` setting. Shares, like the session's, are points of the whole
   limit: at `5h: 50%`, `~20.7%` means 20.7 of those 50 points.
 
 It uses 0 tokens: it only reads local data and never calls the model.
 
-Colours: model bold cyan, effort bold bright magenta; context and limit percentages green below 50%, yellow below 75%,
-red above; cache tier blue for `1h`, magenta for `5m`; session share italic cyan; the rest dim.
+Colours: model bold cyan, effort bold bright magenta, skill lilac; context and limit percentages by how full
+they are: green below 25%, yellow-green below 50%, yellow below 75%, orange below 90%, red above
+(fill colours, on by default; off: `config --level-colors off` or key `f`, and each of context,
+`5h`, `7d` gets a fixed colour of its own); cache tier blue for `1h`, magenta for `5m`; session share italic cyan; the rest dim.
 Set `NO_COLOR=1` to turn colours off.
 
 ## Configure
@@ -40,13 +46,14 @@ always pipes its JSON in, so the status line itself is unaffected).
 | Key | Action |
 | --- | --- |
 | `↑` `↓` (or `k` `j`) | select a row |
-| `space` (or a digit `1`-`8`) | show / hide the field, pick the theme, change the setting |
+| `space` (or a digit `1`-`9`) | show / hide the field, pick the theme, change the setting |
 | `u` `d` (or `Shift+↑` `Shift+↓`) | move the field up / down (hidden fields too; space never moves a row) |
 | `←` `→` | previous / next value of the selected theme or setting; on field rows the detail level (`minimal`, `normal`, `detailed`) |
 | `t` | next theme |
 | `l` | next detail level |
 | `s` / `S` | next separator preset / type your own |
 | `c` | colours on / off |
+| `f` | fill colours (green / yellow / red by how full) on / off |
 | `a` (or `space` on its on/off row) | [agent panel](#agent-panel) on / off; its fields show only while it is on |
 | `r` | reset to defaults |
 | `enter` | save and exit |
@@ -54,8 +61,8 @@ always pipes its JSON in, so the status line itself is unaffected).
 
 When the input is not a terminal (for example piped), it falls back to text commands, one per
 line: a number toggles a field, `u<n>` / `d<n>` moves one, `a` agent panel on / off, `a<n>` toggles
-agent panel field n, `t` next theme, `t<n>` theme n, `l` level, `s` separator, `c`
-colours, `r` reset, `w` save, `q` quit.
+agent panel field n, `t` next theme, `t<n>` theme n, `b<n>` bar style n, `p<n>` bar on / off
+for field n (1 context, 2 5h, 3 7d), `l` level, `s` separator, `c` colours, `f` fill colours, `r` reset, `w` save, `q` quit.
 
 Or set options directly:
 
@@ -63,19 +70,26 @@ Or set options directly:
 claude-statusline config --level minimal --fields model,context,5h,7d --separator " · "
 claude-statusline config --colors off
 claude-statusline config --theme slant   # see Themes below
+claude-statusline config --bars context,5h,7d   # progress bars on these fields; none: no bars
+claude-statusline config --level-colors off     # one colour instead of green / yellow / red
+claude-statusline config --rows 2   # session on row 1, plan limits (5h, 7d, share) on row 2
 claude-statusline config --refresh 5  # re-run every 5 s (at least 3); 0 or off: events only
-claude-statusline config --agent-panel on   # 5 h share in Claude Code's agent rows; off: remove
+claude-statusline config --agent-panel on   # agent rows in Claude Code < 2.1.325; off: remove
 claude-statusline config --show       # print current settings
 claude-statusline config --reset      # back to defaults
 claude-statusline preview             # print a sample line with the current settings
 ```
 
 Settings are stored in `~/.claude/claude-statusline.json` (override with the
-`CLAUDE_STATUSLINE_CONFIG` environment variable). Fields: `model`, `effort`, `context`, `cache`,
-`5h`, `7d`, `share` and `cacheio` (off by default; turn it on with
+`CLAUDE_STATUSLINE_CONFIG` environment variable). Fields: `model`, `effort`, `skill`, `context`, `cache`,
+`5h`, `7d`, `share`, `cacheio` and `agents` (both off by default; turn it on with
 `claude-statusline configure` or `--fields`). The agent panel has its own `agent_fields` (`time`,
-`tokens`, `model`, `effort`, `cache`, `share`), set in its own section of `configure`; as in the
+`tokens`, `model`, `effort`, `skill`, `cache`, `share`), set in its own section of `configure`; as in the
 main line, `effort` sits next to the model, and on its own only when `model` is off. The order in `fields` is the order on the line.
+
+Rows (`--rows`, the Rows setting of `configure`): `1` (default) puts every field on one row; `2`
+splits them, the session (`model`, `effort`, `skill`, `context`, `cache`, `cacheio`) on the first row and the
+plan limits (`5h`, `7d`, `share`) on the second, each row in the configured order and theme.
 
 Detail levels:
 
@@ -97,10 +111,13 @@ a sample of each):
 | `fade` | filled blocks fading into each other ▓▒░ |
 | `boxes` | coloured frame `╭─╮ │ │ ╰─╯` around each field: three rows |
 
-Filled themes colour the block by state: context and limits green / orange / red at the same
-thresholds as the text, cache blue (`1h`), magenta (`5m`) or grey (expired). The shapes are
+Filled themes colour the block by state: context and limits at the same five fill levels as the
+text (with fill colours off each in its own colour, so neighbouring blocks never merge; two
+neighbours of the same colour get a thin `│` between them), cache blue (`1h`), magenta (`5m`) or grey (expired). The shapes are
 standard Unicode characters, so no Nerd Font is needed.
-The context bar has its own style (`--bar`, the Progress bar section of `configure`, key `b`):
+Context and the `5h` / `7d` limits fill up towards a limit, so each can show a progress bar
+(`--bars`, or the "show a bar on" rows of the Progress bar section of `configure`); by default
+only context has one, and the `minimal` level shows none. All bars share one style (`--bar`, key `b`):
 
 | Bar | Look |
 | --- | --- |
@@ -115,6 +132,13 @@ The separator is used by `plain` only. With colours off the filled themes fall b
 The agent panel keeps its own plain rows.
 
 ### Agent panel
+
+> **Claude Code 2.1.325 and later no longer support custom agent rows:** the
+> `subagentStatusLine` setting is deprecated and has no effect, the rows below the prompt always
+> look the default way. To see each running agent (type, task, model, effort, last skill, run
+> time) turn on the `agents` field instead: `claude-statusline configure`, or add `agents` to
+> `--fields`, e.g. `claude-statusline config --fields model,effort,skill,context,cache,5h,7d,share,agents`.
+> Each agent then gets a row of its own below the status line.
 
 Optional, off by default: `claude-statusline config --agent-panel on` (or `a` in
 `claude-statusline configure`) sets Claude Code's

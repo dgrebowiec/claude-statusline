@@ -56,14 +56,23 @@ DEFAULT_THEME = "plain"
 PALETTE: Dict[str, Tuple[int, int, int]] = {
     "model": (25, 231, 39),
     "effort": (97, 231, 171),
-    "ok": (29, 231, 42),
-    "warn": (214, 16, 214),
+    "skill": (54, 231, 141),
+    "agent": (29, 231, 43),
+    "agent_task": (236, 252, 244),
+    "ok": (28, 231, 42),
+    "fair": (106, 16, 148),
+    "warn": (178, 16, 220),
+    "high": (202, 16, 208),
     "bad": (160, 231, 196),
     "tier_1h": (31, 231, 38),
     "tier_5m": (133, 231, 170),
     "expired": (240, 252, 244),
     "none": (238, 250, 244),
     "share": (61, 231, 105),
+    "usage": (66, 231, 73),
+    "usage_context": (66, 231, 73),   # grey teal
+    "usage_5h": (30, 231, 37),        # teal
+    "usage_7d": (94, 231, 136),       # dark gold
     "cacheio": (238, 252, 246),
 }
 
@@ -105,7 +114,13 @@ def _filled(segments: List[Segment], theme: Theme) -> str:
     out = _glyph(theme.lead, segments[0][1]) if theme.lead else ""
     for i, (text, tone) in enumerate(segments):
         if i:
-            out += _glyph(theme.join, segments[i - 1][1], tone)
+            before = segments[i - 1][1]
+            if _colours(before)[0] == _colours(tone)[0]:
+                # The same background on both sides would hide the edge: a thin line instead.
+                bg, fg, _ = _colours(tone)
+                out += f"\033[0;38;5;{fg};48;5;{bg}m\u2502"
+            else:
+                out += _glyph(theme.join, before, tone)
         out += _fill(text, tone)
     return out + _glyph(theme.tail, segments[-1][1]) + RESET
 

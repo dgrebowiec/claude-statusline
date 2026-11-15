@@ -84,3 +84,21 @@ class Samples:
             if same_window(r, resets_at) and (not points or u > points[-1][1]):
                 points.append((t, u))
         return points
+
+
+def read_effort(cache_dir: Path) -> Optional[str]:
+    """The effort level the main status line saw last, for subagents that are not told theirs."""
+    try:
+        return (cache_dir / "effort.txt").read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+def write_effort(cache_dir: Path, level: str) -> None:
+    if read_effort(cache_dir) == level:
+        return
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        (cache_dir / "effort.txt").write_text(level, encoding="utf-8")
+    except OSError:
+        pass

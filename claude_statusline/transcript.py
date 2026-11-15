@@ -2,6 +2,7 @@
 import datetime
 import json
 import os
+import re
 from typing import Any, Dict, List, Optional
 
 
@@ -57,6 +58,24 @@ def last_model(path: str, lines: int = 200) -> Optional[str]:
             rec = usage_record(line)
             if rec is not None:
                 return rec["model"]
+    except OSError:
+        pass
+    return None
+
+
+# A skill's instructions open with this line, whether Claude or the user (/name) invoked it.
+_SKILL_RE = re.compile(r'"type":"text","text":"Base directory for this skill: ([^"\\]+)')
+
+
+def last_skill(path: str, lines: int = 2000) -> Optional[str]:
+    """Name of the skill invoked last in a transcript (its folder name), or None."""
+    try:
+        for line in reversed(tail_lines(path, lines)):
+            if "Base directory for this skill" not in line or '"type":"user"' not in line:
+                continue
+            found = _SKILL_RE.findall(line)
+            if found:
+                return os.path.basename(found[-1].rstrip("/")) or None
     except OSError:
         pass
     return None

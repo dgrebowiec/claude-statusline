@@ -16,11 +16,12 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from . import themes
 from .cache import cache_status
 from .config import Config
 from .render import DEMO_NOW, cache_short, colours_enabled, model_text, paint
-from .samples import Samples
-from .transcript import last_model
+from .samples import Samples, read_effort
+from .transcript import last_model, last_skill
 from .usage import load_index, share_numbers
 
 NAME_GAP = 2  # spaces between the agent name and its description, as in Claude Code
@@ -65,27 +66,38 @@ def row(name: str, name_width: int, label: str, right: str, columns: int) -> str
 
 def right_part(fields: List[str], now: float, started: Optional[float], tokens: Optional[float],
                model_id: Optional[str], effort: Optional[str],
-               cache: Optional[Tuple[str, float]], share: float, colors: bool) -> str:
-    """The chosen pieces of a row's right part, in the configured order."""
+               cache: Optional[Tuple[str, float]], share: float, colors: bool,
+               theme: str = "plain", skill: Optional[str] = None) -> str:
+    """The chosen pieces of a row's right part, in the configured order and theme."""
+    # The filled themes draw the text plainly, the segment's background carries the colour.
+    # The boxes theme needs three rows, so a row falls back to plain.
+    filled = colors and themes.THEMES.get(theme, themes.THEMES["plain"]).filled
+    text_on = colors and not filled
     # Effort sits next to the model, as in the main status line; on its own only without it.
     with_model = "model" in fields and model_id
+    cache_tone = "none"
+    if cache:
+        cache_tone = "expired" if cache[1] <= now else f"tier_{cache[0]}"
     pieces = {
-        "time": fmt_elapsed(now - started) if started else None,
-        "tokens": f"↓ {fmt_count(tokens)} tokens" if tokens else None,
-        "model": model_text(model_id, effort if "effort" in fields else None, colors),
-        "effort": (paint(f"effort: {effort}", "effort", colors)
-                   if effort and not with_model else None),
-        "cache": cache_short(cache, now, colors) if cache else None,
-        "share": paint(f"5h ~{share:.1f}%", "share", colors),
+        "time": (fmt_elapsed(now - started) if started else None, "none"),
+        "tokens": (f"↓ {fmt_count(tokens)} tokens" if tokens else None, "none"),
+        "model": (model_text(model_id, effort if "effort" in fields else None, text_on), "model"),
+        "effort": (paint(f"effort: {effort}", "effort", text_on)
+                   if effort and not with_model else None, "effort"),
+        "skill": (paint(f"skill: {skill}", "skill", text_on) if skill else None, "skill"),
+        "cache": (cache_short(cache, now, text_on) if cache else None, cache_tone),
+        "share": (paint(f"5h ~{share:.1f}%", "share", text_on), "share"),
     }
-    return " · ".join(pieces[name] for name in fields if pieces.get(name))
+    segments = [pieces[name] for name in fields if pieces.get(name) and pieces[name][0]]
+    return themes.join(segments, theme if theme != "boxes" else "plain", colors, " · ")
 
 
 def panel_preview(config: Config, columns: int = 100) -> str:
     """One demo row of the agent panel, for the configurator."""
     now = DEMO_NOW
     right = right_part(config.agent_fields, now, now - 375, 59_300, "claude-sonnet-5-5", "medium",
-                       ("5m", now + 200), 4.8, colours_enabled(config))
+                       ("5m", now + 200), 4.8, colours_enabled(config), config.theme,
+                       "plan-tracker")
     return row("explorer", len("explorer"), "Mapping the config module", right, columns)
 
 
@@ -105,6 +117,7 @@ def subagent_lines(payload: Dict[str, Any], projects_dir: Path, cache_dir: Path,
         return []
     used, resets_at = latest
     index = load_index(str(projects_dir), cache_dir, now)
+    fallback_effort = read_effort(cache_dir)  # tasks often come without their effort
     folder = os.path.join(transcript[: -len(".jsonl")], "subagents")
     names = {t["id"]: t.get("name") or t.get("agentType") or "agent" for t in tasks}
     name_width = max(len(name) for name in names.values())
@@ -120,8 +133,9 @@ def subagent_lines(payload: Dict[str, Any], projects_dir: Path, cache_dir: Path,
             continue
         started = task["startTime"] / 1000 if task.get("startTime") else None
         right = right_part(config.agent_fields, now, started, task.get("tokenCount"),
-                           last_model(path), task.get("effort") or None, cache_status(path),
-                           numbers[0], colors)
+                           last_model(path), task.get("effort") or fallback_effort or None,
+                           cache_status(path), numbers[0], colors, config.theme,
+                           last_skill(path) if "skill" in config.agent_fields else None)
         label = task.get("label") or task.get("description") or ""
         content = row(names[task["id"]], name_width, label, right, columns)
         lines.append(json.dumps({"id": task["id"], "content": content}, ensure_ascii=False))

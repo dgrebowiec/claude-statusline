@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from . import __version__
 from . import config as config_module
-from .config import FIELDS, LEVELS, Config
+from .config import BAR_FIELDS, FIELDS, LEVELS, ROW_COUNTS, Config
 from .configure import main as run_configure
 from .render import colours_enabled, DEFAULT_CACHE_DIR, DEFAULT_PROJECTS_DIR, preview, render
 from .subagent import subagent_lines
@@ -31,6 +31,18 @@ def _parse_fields(value: str) -> List[str]:
         raise argparse.ArgumentTypeError(
             f"unknown field(s): {', '.join(unknown)} (choose from {', '.join(FIELDS)})")
     return names
+
+
+def _parse_bars(value: str) -> List[str]:
+    """Comma-separated fields that get a progress bar; "none" for no bars."""
+    if value.strip().lower() == "none":
+        return []
+    names = [name.strip() for name in value.split(",") if name.strip()]
+    unknown = [name for name in names if name not in BAR_FIELDS]
+    if unknown:
+        raise argparse.ArgumentTypeError(
+            f"no bar for: {', '.join(unknown)} (choose from {', '.join(BAR_FIELDS)}, or none)")
+    return [name for name in BAR_FIELDS if name in names]
 
 
 def _parse_refresh(value: str) -> int:
@@ -67,8 +79,17 @@ def _build_parser() -> argparse.ArgumentParser:
                      help="how fields are drawn: plain text, filled blocks (blocks, slant, fade) "
                           "or coloured borders (boxes)")
     cfg.add_argument("--bar", choices=BAR_NAMES,
-                     help="style of the context progress bar (auto: ascii on plain, bricks on "
+                     help="style of the progress bars (auto: ascii on plain, bricks on "
                           "the filled themes)")
+    cfg.add_argument("--bars", type=_parse_bars, metavar="FIELDS",
+                     help="comma-separated fields that show a progress bar, from "
+                          f"{', '.join(BAR_FIELDS)}; none: no bars (default: context)")
+    cfg.add_argument("--level-colors", choices=["on", "off"],
+                     help="colour context and limits by how full they are: green below 50%%, "
+                          "yellow below 75%%, red above (default: on)")
+    cfg.add_argument("--rows", type=int, choices=ROW_COUNTS,
+                     help="1: everything on one row; 2: the session (model, effort, context, "
+                          "cache) on the first row, the plan limits (5h, 7d, share) on the second")
     cfg.add_argument("--separator", help='text between fields (plain theme), e.g. " · "')
     cfg.add_argument("--colors", choices=["on", "off"])
     cfg.add_argument("--refresh", type=_parse_refresh, metavar="SECONDS",
@@ -79,7 +100,8 @@ def _build_parser() -> argparse.ArgumentParser:
     cfg.add_argument("--agent-panel", choices=["on", "off"],
                      help="add each running subagent's 5 h share to its row in Claude Code's "
                           "agent panel (subagentStatusLine). Claude Code then redraws those "
-                          "rows every 5 s instead of every second")
+                          "rows every 5 s instead of every second. Ignored by Claude Code 2.1.325 "
+                          "and later; use the agents field instead")
     cfg.add_argument("--show", action="store_true", help="print the current settings as JSON")
     cfg.add_argument("--reset", action="store_true", help="restore the defaults")
     return parser
@@ -110,7 +132,8 @@ def _config_command(args: argparse.Namespace) -> None:
     if args.agent_panel:
         _agent_panel_command(args.agent_panel == "on")
     if args.refresh is not None or args.agent_panel:
-        if not any((args.level, args.fields, args.theme, args.bar, args.separator is not None, args.colors,
+        if not any((args.level, args.fields, args.theme, args.bar, args.bars is not None,
+                    args.level_colors, args.rows, args.separator is not None, args.colors,
                     args.reset, args.show)):
             return
     path = config_module.config_path()
@@ -127,6 +150,12 @@ def _config_command(args: argparse.Namespace) -> None:
         config.theme, changed = args.theme, True
     if args.bar:
         config.bar, changed = args.bar, True
+    if args.bars is not None:
+        config.bars, changed = args.bars, True
+    if args.level_colors:
+        config.level_colors, changed = args.level_colors == "on", True
+    if args.rows:
+        config.rows, changed = args.rows, True
     if args.separator is not None:
         config.separator, changed = args.separator, True
     if args.colors:

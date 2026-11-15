@@ -132,10 +132,10 @@ def test_editor_toggle_keeps_row_and_cursor_in_place():
 def test_editor_can_move_a_hidden_field_and_it_keeps_its_place():
     editor = Editor(Config())
     _press(editor, "space")  # hide "model" (row 1)
-    _press(editor, "d", "d")  # move it below "context" while hidden
-    assert editor.order[:3] == ["effort", "context", "model"] and editor.cursor == 2
+    _press(editor, "d", "d")  # move it below "skill" while hidden
+    assert editor.order[:3] == ["effort", "skill", "model"] and editor.cursor == 2
     _press(editor, "space")  # turn it back on
-    assert editor.config.fields[:3] == ["effort", "context", "model"]
+    assert editor.config.fields[:3] == ["effort", "skill", "model"]
 
 
 def test_editor_move_and_level_with_arrows():
@@ -168,7 +168,7 @@ def test_editor_quit_asks_twice_when_dirty():
 
 def test_editor_enter_saves_and_digits_toggle():
     editor = Editor(Config())
-    assert _press(editor, "7") is None  # toggle field 7 ("share")
+    assert _press(editor, "8") is None  # toggle field 8 ("share")
     assert "share" not in editor.config.fields
     assert _press(editor, "enter") == "save"
 
@@ -200,7 +200,8 @@ def test_every_theme_renders_and_keeps_the_text():
 
 def test_filled_themes_colour_the_background_by_state():
     line = preview(Config(theme="blocks"))
-    assert "\033[48;5;214" in line  # 5h at 72%: orange block
+    assert "\033[48;5;178" in line  # 5h at 72%: yellow block
+    assert "\033[48;5;106" in line  # context at 42%: yellow-green block
     assert "\033[48;5;160" in line  # 7d at 96%: red block
     assert "\033[32m" not in line   # text inside the blocks is not coloured on its own
 
@@ -274,3 +275,123 @@ def test_editor_screen_scrolls_to_keep_the_cursor_in_view():
     assert len(lines) <= 30
     assert any("▲ more" in line for line in lines)
     assert any("▸" in line for line in lines)
+
+
+# --- progress bars on the limits, fill colours ---
+
+def test_bars_and_level_colors_defaults_and_parsing():
+    assert Config().bars == ["context"] and Config().level_colors is True
+    assert from_dict({"bars": []}).bars == []  # no bars at all is a valid choice
+    assert from_dict({"bars": ["7d", "nope", "context"]}).bars == ["context", "7d"]
+    assert from_dict({"bars": "x", "level_colors": "x"}) == Config()
+
+
+def test_limit_bars_follow_the_config():
+    plain = preview(Config(colors=False))
+    assert "] 42%" in plain and "5h: 72%" in plain
+    both = preview(Config(colors=False, bars=["5h", "7d"]))
+    assert "5h: [" in both and "7d: [" in both and "] 42%" not in both
+    assert "[" not in preview(Config(colors=False, level="minimal", bars=["context", "5h"]))
+
+
+def test_level_colors_off_paints_percentages_in_one_colour():
+    on, off = preview(Config()), preview(Config(level_colors=False))
+    assert "\033[31m" in on and "\033[33m72%" in on
+    assert "\033[36m72%" in off and "\033[31m96%" not in off
+
+
+def test_cli_and_editor_set_bars_and_level_colors(tmp_path, monkeypatch):
+    path = tmp_path / "c.json"
+    monkeypatch.setenv("CLAUDE_STATUSLINE_CONFIG", str(path))
+    cli.main(["config", "--bars", "5h,context", "--level-colors", "off"])
+    assert config_module.load(path).bars == ["context", "5h"]
+    assert config_module.load(path).level_colors is False
+    cli.main(["config", "--bars", "none"])
+    assert config_module.load(path).bars == []
+    editor = Editor(Config())
+    editor.cursor = editor.row_index("bar_field", "7d")
+    _press(editor, "space")
+    assert editor.config.bars == ["context", "7d"]
+    _press(editor, "f")
+    assert editor.config.level_colors is False
+    _press(editor, "r")
+    assert editor.config.bars == ["context"] and editor.config.level_colors is True
+
+
+def test_two_rows_put_the_plan_limits_on_the_second_row(tmp_path, monkeypatch):
+    assert "\n" not in preview(Config(colors=False))
+    first, second = preview(Config(colors=False, rows=2)).split("\n")
+    assert "Opus 5.5" in first and "42%" in first and "cache" in first and "5h" not in first
+    assert second.startswith("5h: 72%") and "7d" in second and "session" in second
+    only_limits = preview(Config(colors=False, rows=2, fields=["5h", "7d"]))
+    assert "\n" not in only_limits  # an empty row is left out
+    assert from_dict({"rows": 3}).rows == 1
+    monkeypatch.setenv("CLAUDE_STATUSLINE_CONFIG", str(tmp_path / "c.json"))
+    cli.main(["config", "--rows", "2"])
+    assert config_module.load(tmp_path / "c.json").rows == 2
+    editor = Editor(Config())
+    editor.cursor = editor.row_index("rows")
+    _press(editor, "right")
+    assert editor.config.rows == 2
+
+
+def test_five_fill_levels_and_distinct_blocks_without_them():
+    from claude_statusline.render import level
+    assert [level(p) for p in (0, 25, 50, 75, 90)] == ["ok", "fair", "warn", "high", "bad"]
+    line = preview(Config(theme="slant", level_colors=False, bars=["context", "5h", "7d"]))
+    for bg in (66, 30, 94):  # context, 5h, 7d: a colour of their own each
+        assert f"\033[48;5;{bg};" in line
+    from claude_statusline.themes import join
+    same = join([("a", "usage"), ("b", "usage_context")], "slant", True, " | ")
+    assert "\u2502" in same  # the same background on both sides: a thin line between
+
+
+def test_skill_field_shows_the_last_invoked_skill(tmp_path):
+    from claude_statusline.transcript import last_skill
+    path = tmp_path / "t.jsonl"
+    lines = [
+        '{"type":"user","message":{"content":[{"type":"text","text":"Base directory for this skill: /h/.claude/skills/plan-tracker\\n\\n# x"}]}}',
+        '{"type":"assistant","message":{"content":[{"type":"text","text":"Base directory for this skill: fake"}]}}',
+        '{"type":"user","message":{"content":[{"type":"text","text":"Base directory for this skill: /p/skills/pdf\\n"}]}}',
+        '{"type":"user","message":{"content":"hello"}}',
+    ]
+    path.write_text("\n".join(lines) + "\n")
+    assert last_skill(str(path)) == "pdf"
+    path.write_text('{"type":"user","message":{"content":"hello"}}\n')
+    assert last_skill(str(path)) is None
+
+
+def test_skill_field_in_preview_and_hidden_without_one():
+    from claude_statusline.render import preview
+    assert "skill: plan-tracker" in preview(Config(colors=False))
+    assert "plan-tracker" not in preview(Config(fields=["model", "context"]))
+
+
+def test_running_agents_reads_meta_and_skips_finished(tmp_path):
+    import json as _json, os as _os
+    from claude_statusline.agents import running_agents
+    transcript = tmp_path / "s.jsonl"
+    transcript.write_text("")
+    folder = tmp_path / "s" / "subagents"
+    folder.mkdir(parents=True)
+    rec = {"type": "user", "timestamp": "2026-11-15T12:00:00Z", "message": {"content": "go"}}
+    skill = ('{"type":"user","message":{"content":[{"type":"text","text":'
+             '"Base directory for this skill: /x/skills/pdf\\n"}]}}')
+    for agent_id, finished in (("a1", False), ("a2", True)):
+        (folder / f"agent-{agent_id}.jsonl").write_text(_json.dumps(rec) + "\n" + skill + "\n")
+        (folder / f"agent-{agent_id}.meta.json").write_text(_json.dumps(
+            {"agentType": "wykonawca", "description": "Task " + agent_id, "finished": finished}))
+    now = _os.path.getmtime(folder / "agent-a1.jsonl") + 5
+    agents = running_agents(str(transcript), now)
+    assert [(a.name, a.description, a.skill) for a in agents] == [("wykonawca", "Task a1", "pdf")]
+    assert running_agents(str(transcript), now + 3600) == []  # idle too long: gone
+
+
+def test_agents_field_adds_a_row_per_agent_and_is_off_by_default():
+    from claude_statusline.config import DEFAULT_FIELDS
+    from claude_statusline.render import preview
+    assert "agents" not in DEFAULT_FIELDS
+    assert "wykonawca" not in preview(Config(colors=False))
+    lines = preview(Config(fields=DEFAULT_FIELDS + ["agents"], colors=False)).splitlines()
+    assert lines[1].startswith("\u25b8 wykonawca | Implement") and "skill: kotlin-android" in lines[1]
+    assert lines[2].startswith("\u25b8 Explore")

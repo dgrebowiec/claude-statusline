@@ -11,9 +11,9 @@ from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
 from . import config as config_module
-from .config import (AGENT_FIELD_DESCRIPTIONS, AGENT_FIELDS, DEFAULT_SEPARATOR, FIELD_DESCRIPTIONS,
-                     FIELDS, LEVELS, Config)
-from .render import preview
+from .config import (AGENT_FIELD_DESCRIPTIONS, AGENT_FIELDS, BAR_FIELDS, DEFAULT_SEPARATOR,
+                     FIELD_DESCRIPTIONS, FIELDS, LEVELS, ROW_COUNTS, SECOND_ROW_FIELDS, Config)
+from .render import FILL_LEVELS, STYLES, preview
 from .settings import default_settings_path, get_agent_panel, set_agent_panel
 from .subagent import panel_preview
 from .themes import BAR_NAMES, THEME_NAMES, THEMES
@@ -22,12 +22,15 @@ SEPARATOR_PRESETS = [" | ", " · ", " │ ", " / ", "  "]
 
 KEY_HELP = [
     "↑↓ select   space show/hide, pick or switch   ←→ change value   u/d move field",
-    "t next theme   b next bar   l level   s/S separator   c colours   a agent panel   r reset",
+    "t next theme   b next bar   l level   s/S separator   c colours   f fill colours",
+    "a agent panel   r reset",
     "enter save   q quit",
 ]
 
 # Why the agent panel costs smoothness; shown next to its on/off switch.
-AGENT_PANEL_NOTE = ("Claude Code runs this command on a fixed 5 s timer (not configurable) and the "
+AGENT_PANEL_NOTE = ("Claude Code 2.1.325 and later ignore this setting (subagentStatusLine is "
+                    "deprecated): agent rows always look the default way. To see each agent, "
+                    "turn on the agents field above. On older versions: Claude Code runs this command on a fixed 5 s timer (not configurable) and the "
                     "row it returns replaces Claude Code's own, so while it is on the agent rows, "
                     "run time included, update every 5 s instead of every second.")
 
@@ -39,6 +42,9 @@ LINE_HELP = """commands:
                                           field n (ua<n> / da<n> to move it)
   l          cycle detail level            s            set separator
   c          colours on / off              r            reset to defaults
+  f          fill colours on / off         p<n>         bar on / off for field n
+                                          (1 context, 2 5h, 3 7d)
+  rows       one row / two rows
   w          save and exit                 q            quit without saving"""
 
 REVERSE = "\033[7m"
@@ -51,7 +57,22 @@ ON = "\033[32m"
 # Fields of the small sample shown next to every theme.
 THEME_SAMPLE_FIELDS = ["model", "context", "5h", "7d"]
 
-Row = Tuple[str, object]  # (kind, key): field / theme / bar / level / separator / colors / agent / agent_field
+Row = Tuple[str, object]  # (kind, key): field / theme / bar / bar_field / level / separator /
+# colors / level_colors / rows / agent / agent_field
+
+
+def fill_value(on: bool) -> str:
+    """The fill colours switch with a legend of its levels, each in its own colour."""
+    steps = sorted(FILL_LEVELS)
+    legend = []
+    for i, (lowest, style) in enumerate(steps):
+        upper = steps[i + 1][0] if i + 1 < len(steps) else 100
+        text = f"■ {lowest}–{upper}%"
+        legend.append(f"\033[{STYLES[style]}m{text}{RESET}" if on else f"{DIM}{text}{RESET}")
+    if on:
+        return f"{ON}● on{RESET}   " + "  ".join(legend)
+    return (f"{DIM}○ off{RESET}   " + "  ".join(legend)
+            + f"   {DIM}(off: every field its own colour){RESET}")
 
 
 def display_order(config: Config, agent: bool = False) -> List[str]:
@@ -73,7 +94,8 @@ def heading(title: str, hint: str, width: int) -> str:
 def theme_sample(config: Config, name: str) -> str:
     """One row of the theme `name`, for its entry in the theme list."""
     sample = Config(level="minimal", fields=list(THEME_SAMPLE_FIELDS), theme=name,
-                    separator=config.separator, colors=config.colors)
+                    separator=config.separator, colors=config.colors,
+                    level_colors=config.level_colors)
     lines = preview(sample).split("\n")
     return lines[len(lines) // 2]
 
@@ -81,7 +103,8 @@ def theme_sample(config: Config, name: str) -> str:
 def bar_sample(config: Config, name: str) -> str:
     """The context field drawn with bar style `name` in the current theme."""
     sample = Config(level="normal", fields=["context"], theme=config.theme, bar=name,
-                    separator=config.separator, colors=config.colors)
+                    separator=config.separator, colors=config.colors,
+                    level_colors=config.level_colors)
     lines = preview(sample).split("\n")
     return lines[len(lines) // 2].split(" (")[0] + RESET  # the cut-off tail held the reset
 
@@ -108,10 +131,11 @@ class Editor:
         rows: List[Row] = [("field", i) for i in range(len(self.order))]
         rows += [("theme", name) for name in THEME_NAMES]
         rows += [("bar", name) for name in BAR_NAMES]
-        rows += [("level", None)]
+        rows += [("bar_field", name) for name in BAR_FIELDS]
+        rows += [("level", None), ("rows", None)]
         if self.config.theme == "plain":  # the other themes draw their own joints
             rows.append(("separator", None))
-        rows += [("colors", None), ("agent", None)]
+        rows += [("colors", None), ("level_colors", None), ("agent", None)]
         if self.agent_panel:
             rows += [("agent_field", i) for i in range(len(self.agent_order))]
         return rows
@@ -161,12 +185,18 @@ class Editor:
             self.set_theme(str(key))
         elif kind == "bar":
             self.set_bar(str(key))
+        elif kind == "bar_field":
+            self.toggle_bar_field(str(key))
         elif kind == "level":
             self.cycle_level(1)
+        elif kind == "rows":
+            self.cycle_rows()
         elif kind == "separator":
             self.next_separator()
         elif kind == "colors":
             self.toggle_colors()
+        elif kind == "level_colors":
+            self.toggle_level_colors()
         elif kind == "agent":
             self.toggle_agent_panel()
 
@@ -186,6 +216,12 @@ class Editor:
             self.next_separator(step)
         elif kind == "colors":
             self.toggle_colors()
+        elif kind == "level_colors":
+            self.toggle_level_colors()
+        elif kind == "rows":
+            self.cycle_rows(step)
+        elif kind == "bar_field":
+            self.toggle_bar_field(str(self.current()[1]))
         elif kind == "agent":
             self.toggle_agent_panel()
         else:
@@ -263,6 +299,20 @@ class Editor:
         self.config.colors = not self.config.colors
         self._changed()
 
+    def cycle_rows(self, step: int = 1) -> None:
+        index = ROW_COUNTS.index(self.config.rows) if self.config.rows in ROW_COUNTS else 0
+        self.config.rows = ROW_COUNTS[(index + step) % len(ROW_COUNTS)]
+        self._changed()
+
+    def toggle_level_colors(self) -> None:
+        self.config.level_colors = not self.config.level_colors
+        self._changed()
+
+    def toggle_bar_field(self, name: str) -> None:
+        bars = set(self.config.bars) ^ {name}
+        self.config.bars = [field for field in BAR_FIELDS if field in bars]
+        self._changed()
+
     def toggle_agent_panel(self) -> None:
         self.agent_panel = not self.agent_panel
         if self.cursor >= self._total():  # its rows are hidden now
@@ -274,7 +324,8 @@ class Editor:
         self.config.level, self.config.fields = defaults.level, defaults.fields
         self.config.separator, self.config.colors = defaults.separator, defaults.colors
         self.config.agent_fields, self.config.theme = defaults.agent_fields, defaults.theme
-        self.config.bar = defaults.bar
+        self.config.bar, self.config.bars = defaults.bar, defaults.bars
+        self.config.level_colors, self.config.rows = defaults.level_colors, defaults.rows
         self.order = display_order(self.config)
         self.agent_order = display_order(self.config, agent=True)
         self.cursor = 0
@@ -307,6 +358,7 @@ class Editor:
             "s": self.next_separator,
             "S": lambda: self.set_separator(ask("separator (empty = default): ")),
             "c": self.toggle_colors,
+            "f": self.toggle_level_colors,
             "a": self.toggle_agent_panel,
             "r": self.reset,
         }
@@ -343,6 +395,16 @@ class Editor:
             self.cycle_level(1)
         elif command == "c":
             self.toggle_colors()
+        elif command == "f":
+            self.toggle_level_colors()
+        elif command == "rows":
+            self.cycle_rows()
+        elif command[:1] == "p" and command[1:].isdigit():
+            number = int(command[1:])
+            if 1 <= number <= len(BAR_FIELDS):
+                self.toggle_bar_field(BAR_FIELDS[number - 1])
+            else:
+                self.message = f"no bar field {number}"
         elif command == "s":
             self.set_separator(ask("separator (empty = default): "))
         elif command == "r":
@@ -437,17 +499,33 @@ class Editor:
             mark = f"{ON}◉{RESET}" if name == cfg.bar else f"{DIM}○{RESET}"
             label = f"{mark} {BOLD if name == cfg.bar else ''}{name:<10}{RESET}"
             add(index, self._row(index, label, "  " + bar_sample(cfg, name)))
+        body.append(f"     {DIM}show a bar on:{RESET}")
+        for name in BAR_FIELDS:
+            index = rows.index(("bar_field", name))
+            on = name in cfg.bars
+            mark = f"{ON}●{RESET}" if on else f"{DIM}○{RESET}"
+            label = f"{mark} {BOLD if on else DIM}{name:<10}{RESET}"
+            add(index, self._row(index, label, f"  {DIM}{FIELD_DESCRIPTIONS[name]}{RESET}"))
+        if cfg.level == "minimal":
+            body.append(f"     {DIM}(the minimal level shows no bars){RESET}")
 
         body += ["", heading("Appearance", "space or ←→ change", width)]
         level = f"◀ {cfg.level} ▶   {DIM}{' / '.join(LEVELS)}{RESET}"
         separator = f"{cfg.separator!r}   {DIM}S: type your own{RESET}"
+        second = ", ".join(SECOND_ROW_FIELDS)
+        rows_value = f"◀ {cfg.rows} ▶   {DIM}" + (
+            f"session above, plan limits ({second}) below" if cfg.rows == 2
+            else "everything on one row") + RESET
         colours = f"{ON}● on{RESET}" if cfg.colors else f"{DIM}○ off{RESET}"
-        for kind, label, value in (("level", "Level", level), ("separator", "Separator", separator),
-                                   ("colors", "Colours", colours)):
+        fill = fill_value(cfg.level_colors)
+        for kind, label, value in (("level", "Level", level), ("rows", "Rows", rows_value),
+                                   ("separator", "Separator", separator),
+                                   ("colors", "Colours", colours),
+                                   ("level_colors", "Fill colours", fill)):
             if (kind, None) not in rows:
                 continue
             index = rows.index((kind, None))
-            add(index, self._row(index, f"{label:<10}", " " + value))
+            add(index, self._row(index, f"{label:<12}", " " + value))
 
         body += ["", heading("Agent panel", "rows of running subagents · space or a on/off", width)]
         index = rows.index(("agent", None))

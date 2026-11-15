@@ -9,9 +9,11 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from . import config as config_module
 from . import themes
 from .cache import cache_status, last_cache_io
-from .config import Config
-from .samples import Samples
+from .config import SECOND_ROW_FIELDS, Config
+from .samples import Samples, write_effort
 from .pricing import display_model
+from .agents import Agent, running_agents
+from .transcript import last_skill
 from .usage import load_index, share_numbers
 
 DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
@@ -22,8 +24,12 @@ RESET = "\033[0m"
 STYLES = {
     "model": "1;36",       # bold cyan
     "effort": "1;95",      # bold bright magenta
+    "skill": "38;5;183",   # lilac
+    "agent": "1;38;5;43",  # bold sea green: a subagent's name
     "sep": "2",            # dim
+    "fair": "38;5;148",    # yellow-green
     "warn": "33",          # yellow
+    "high": "38;5;208",    # orange
     "bad": "31",           # red
     "ok": "32",            # green
     "dim": "2",
@@ -34,7 +40,11 @@ STYLES = {
     "expired": "2;31",     # dim red
     "cache_read": "32",    # green: a read is a cache hit
     "cache_write": "33",   # yellow: a write costs more than a plain input
+    "usage": "36",         # cyan: a percentage when the level colours are off
 }
+
+# Fill levels: (lowest percent, style), from the top down.
+FILL_LEVELS = ((90, "bad"), (75, "high"), (50, "warn"), (25, "fair"), (0, "ok"))
 
 BAR_WIDTH = 20
 LIMITS = {"5h": ("five_hour", 5), "7d": ("seven_day", 168)}  # field -> (payload key, hours)
@@ -52,12 +62,23 @@ def paint(text: str, style: str, enabled: bool) -> str:
 
 
 def level(pct: float) -> str:
-    """Traffic-light style for usage: green below 50%, yellow below 75%, red above."""
-    if pct >= 75:
-        return "bad"
-    if pct >= 50:
-        return "warn"
+    """Style by how full a field is: green, yellow-green from 25%, yellow from 50%,
+    orange from 75%, red from 90%."""
+    for lowest, style in FILL_LEVELS:
+        if pct >= lowest:
+            return style
     return "ok"
+
+
+def usage_style(config: Config, pct: float) -> str:
+    """Style of a filling field: by level when level colours are on, else one fixed colour."""
+    return level(pct) if config.level_colors else "usage"
+
+
+def usage_tone(config: Config, name: str, pct: float) -> str:
+    """Theme tone of a filling field: its level, or with level colours off a colour of its own,
+    so neighbouring blocks stay apart."""
+    return level(pct) if config.level_colors else f"usage_{name}"
 
 
 def fmt_tokens(n: float) -> str:
@@ -85,6 +106,12 @@ class Sources:
     def cache_io(self, transcript: str) -> Optional[Tuple[int, int]]:
         return last_cache_io(transcript)
 
+    def skill(self, transcript: str) -> Optional[str]:
+        return last_skill(transcript)
+
+    def agents(self, transcript: str, now: float) -> List[Agent]:
+        return running_agents(transcript, now)
+
     def _load(self, now: float) -> None:
         """Index and limit readings, once per run for all fields."""
         if self._index is None:
@@ -100,6 +127,9 @@ class Sources:
 
     def observe_limits(self, payload: Dict[str, Any], now: float) -> None:
         """Log this run's reading of the limits for every session to split rises by."""
+        level_name = (payload.get("effort") or {}).get("level")
+        if level_name:
+            write_effort(self.cache_dir, level_name)
         limits = payload.get("rate_limits") or {}
         if not any((limits.get(key) or {}).get("resets_at") for key, _ in LIMITS.values()):
             return
@@ -153,8 +183,18 @@ def _effort(f: Frame) -> Optional[str]:
     return paint(text, "effort", f.on) if text else None
 
 
+def _skill(f: Frame) -> Optional[str]:
+    """The skill invoked last; nothing until one is."""
+    name = f.sources.skill(f.transcript) if f.transcript else None
+    if not name:
+        return None
+    text = paint(name, "skill", f.on)
+    return text if f.config.level == "minimal" else "skill: " + text
+
+
 def progress_bar(config: Config, filled: int) -> str:
-    """The context bar in the configured style; on the filled themes the empty cells are dimmed."""
+    """A bar of `filled` cells in the configured style; on the filled themes the empty cells are
+    dimmed."""
     on_block = colours_enabled(config) and themes.THEMES.get(config.theme, themes.THEMES["plain"]).filled
     name = config.bar if config.bar in themes.BARS else themes.DEFAULT_BAR
     if name == "auto":
@@ -166,17 +206,23 @@ def progress_bar(config: Config, filled: int) -> str:
     return before + full * filled + rest + after
 
 
+def bar_for(config: Config, pct: int) -> str:
+    """The bar of a field at `pct` percent, followed by a space."""
+    filled = max(0, min(pct * BAR_WIDTH // 100, BAR_WIDTH))
+    return progress_bar(config, filled) + " "
+
+
 def _context(f: Frame) -> str:
     context = f.payload.get("context_window") or {}
     pct = context.get("used_percentage")
     if pct is None:
         return "context: " + paint("no data", "dim", f.on)
     pct_int = int(float(pct))
-    style = level(pct_int)
+    style = usage_style(f.config, pct_int)
     if f.config.level == "minimal":
         return paint(f"{pct_int}%", style, f.on)
-    filled = min(pct_int * BAR_WIDTH // 100, BAR_WIDTH)
-    out = paint(f"{progress_bar(f.config, filled)} {pct_int}%", style, f.on)
+    bar = bar_for(f.config, pct_int) if f.config.has_bar("context") else ""
+    out = paint(f"{bar}{pct_int}%", style, f.on)
     tokens = context.get("total_input_tokens")
     size = context.get("context_window_size")
     if tokens is not None and size is not None:
@@ -184,9 +230,10 @@ def _context(f: Frame) -> str:
         if f.config.level == "detailed":
             detail += f", {fmt_tokens(size - tokens)} left"
         out += " " + paint(detail + ")", "dim", f.on)
-    if style == "bad":
+    # The warnings stay, whatever the colours.
+    if pct_int >= 75:
         out += " " + paint("!! FULL: run /compact or start a new session", "bad", f.on)
-    elif style == "warn":
+    elif pct_int >= 50:
         out += " " + paint("! high", "warn", f.on)
     return out
 
@@ -242,7 +289,9 @@ def _limit(name: str) -> Callable[[Frame], Optional[str]]:
         if used is None:
             return None
         pct = int(float(used))
-        text = paint(name, "label", f.on) + ": " + paint(f"{pct}%", level(pct), f.on)
+        bar = bar_for(f.config, pct) if f.config.has_bar(name) else ""
+        text = (paint(name, "label", f.on) + ": "
+                + paint(f"{bar}{pct}%", usage_style(f.config, pct), f.on))
         if f.config.level == "minimal":
             return text
         resets_at = window.get("resets_at")
@@ -301,6 +350,7 @@ def model_text(model_id: Optional[str], effort: Optional[str], on: bool) -> Opti
 BUILDERS: Dict[str, Callable[[Frame], Optional[str]]] = {
     "model": _model,
     "effort": _effort,
+    "skill": _skill,
     "context": _context,
     "cache": _cache,
     "5h": _limit("5h"),
@@ -321,7 +371,7 @@ def tone(name: str, f: Frame) -> str:
     """The colour group of a field's segment, for themes: the state where there is one."""
     if name in ("context", "5h", "7d"):
         used = _used(f, name)
-        return "none" if used is None else level(float(used))
+        return "none" if used is None else usage_tone(f.config, name, float(used))
     if name == "cache":
         status = f.cache()
         if status is None:
@@ -339,12 +389,40 @@ def build(payload: Dict[str, Any], now: float, config: Config, sources: Sources)
     # Filled themes draw the text plainly: the segment's background carries its colour.
     filled = on and themes.THEMES.get(config.theme, themes.THEMES["plain"]).filled
     frame = Frame(payload, now, config, sources, transcript, on and not filled)
-    segments = []
+    rows: List[List[Tuple[str, str]]] = [[], []]
     for name in config.fields:
+        if name == "agents":
+            continue
         text = BUILDERS[name](frame)
         if text:
-            segments.append((text, tone(name, frame)))
-    return themes.join(segments, config.theme, on, paint(config.separator, "sep", on))
+            row = 1 if config.rows == 2 and name in SECOND_ROW_FIELDS else 0
+            rows[row].append((text, tone(name, frame)))
+    if "agents" in config.fields and transcript:
+        rows += [_agent_row(agent, frame) for agent in sources.agents(transcript, now)]
+    separator = paint(config.separator, "sep", on)
+    return "\n".join(themes.join(row, config.theme, on, separator) for row in rows if row)
+
+
+AGENT_LABEL_WIDTH = 40
+
+
+def _agent_row(agent: Agent, f: Frame) -> List[Tuple[str, str]]:
+    """One running subagent: name and task, model, skill, run time."""
+    from .subagent import fmt_elapsed
+    label = agent.description
+    if len(label) > AGENT_LABEL_WIDTH:
+        label = label[: AGENT_LABEL_WIDTH - 1] + "…"
+    row = [(paint(f"\u25b8 {agent.name}", "agent", f.on), "agent")]
+    if label and f.config.level != "minimal":
+        row.append((label, "agent_task"))
+    model = model_text(agent.model_id, agent.effort, f.on)
+    if model:
+        row.append((model, "model"))
+    if agent.skill:
+        row.append(("skill: " + paint(agent.skill, "skill", f.on), "skill"))
+    if agent.started:
+        row.append((paint(fmt_elapsed(f.now - agent.started), "dim", f.on), "none"))
+    return row
 
 
 def render(payload: Dict[str, Any], now: Optional[float] = None,
@@ -382,6 +460,14 @@ class DemoSources(Sources):
 
     def cache_io(self, transcript: str) -> Optional[Tuple[int, int]]:
         return 118_432, 4_120
+
+    def skill(self, transcript: str) -> Optional[str]:
+        return "plan-tracker"
+
+    def agents(self, transcript: str, now: float) -> List[Agent]:
+        return [Agent("wykonawca", "Implement the config parser", now - 375, "claude-sonnet-5-5",
+                      "medium", "kotlin-android"),
+                Agent("Explore", "Map the cache module", now - 42, "claude-haiku-5-5", None, None)]
 
     def observe_limits(self, payload, now):
         pass

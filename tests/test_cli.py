@@ -347,3 +347,11 @@ def test_bare_command_in_a_terminal_opens_the_configurator(monkeypatch):
     monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: True)
     cli.main([])
     assert opened
+
+
+def test_agent_panel_right_part_follows_the_theme():
+    from claude_statusline.subagent import right_part
+    args = (["model", "share"], 1000.0, None, None, "claude-sonnet-5-5", None, None, 1.5, True)
+    assert "\033[48;5;" in right_part(*args, "slant")
+    assert "\033[48;5;" not in right_part(*args, "plain")
+    assert "\n" not in right_part(*args, "boxes")
