@@ -5,7 +5,8 @@ from pathlib import Path
 import pytest
 
 from claude_statusline import __version__, cli
-from claude_statusline.config import FIELDS, Config
+from claude_statusline.config import FIELDS
+from classic import Config
 from claude_statusline.render import render
 from claude_statusline.settings import get_refresh, install, set_refresh, uninstall
 
@@ -31,7 +32,7 @@ def _payload(pct=42, **extra):
 
 def _render(tmp_path, payload):
     return render(payload, now=NOW, projects_dir=tmp_path / "projects",
-                  cache_dir=tmp_path / "cache")
+                  cache_dir=tmp_path / "cache", config=Config())
 
 
 def test_render_context_and_no_transcript(tmp_path):

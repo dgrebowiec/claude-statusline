@@ -32,12 +32,12 @@ AGENT_FIELD_DESCRIPTIONS = {
 }
 # Fields that fill up towards a limit: each can show a progress bar.
 BAR_FIELDS = ("context", "5h", "7d")
-DEFAULT_BARS = ["context"]
+DEFAULT_BARS = ["context", "5h", "7d"]
 # With two rows: the session on the first one, the plan limits on the second.
 SECOND_ROW_FIELDS = ("5h", "7d", "share")
 ROW_COUNTS = (1, 2)
 LEVELS = ("minimal", "normal", "detailed")
-DEFAULT_FIELDS = ["model", "effort", "skill", "context", "cache", "5h", "7d", "share"]
+DEFAULT_FIELDS = ["model", "effort", "skill", "context", "cache", "5h", "7d", "share", "cacheio"]
 DEFAULT_SEPARATOR = " | "
 
 
@@ -52,7 +52,7 @@ class Config:
     bar: str = DEFAULT_BAR
     bars: List[str] = field(default_factory=lambda: list(DEFAULT_BARS))  # fields with a bar
     level_colors: bool = True  # green / yellow / red by how full a field is
-    rows: int = 1  # 2: session on the first row, plan limits on the second
+    rows: int = 2  # 2: session on the first row, plan limits on the second
 
     def has_bar(self, name: str) -> bool:
         return name in self.bars and self.level != "minimal"
@@ -104,7 +104,7 @@ def from_dict(data: Any) -> Config:
         bar=data.get("bar") if data.get("bar") in BAR_NAMES else DEFAULT_BAR,
         bars=bars,
         level_colors=level_colors if isinstance(level_colors, bool) else True,
-        rows=data.get("rows") if data.get("rows") in ROW_COUNTS else 1,
+        rows=data.get("rows") if data.get("rows") in ROW_COUNTS else 2,
     )
 
 

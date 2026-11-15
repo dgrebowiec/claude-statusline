@@ -465,7 +465,7 @@ class DemoSources(Sources):
         return "plan-tracker"
 
     def agents(self, transcript: str, now: float) -> List[Agent]:
-        return [Agent("wykonawca", "Implement the config parser", now - 375, "claude-sonnet-5-5",
+        return [Agent("worker", "Implement the config parser", now - 375, "claude-sonnet-5-5",
                       "medium", "kotlin-android"),
                 Agent("Explore", "Map the cache module", now - 42, "claude-haiku-5-5", None, None)]
 

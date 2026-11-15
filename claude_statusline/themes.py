@@ -50,7 +50,7 @@ BARS: Dict[str, Tuple[str, str, str, str]] = {
 }
 BAR_NAMES = tuple(BARS)
 DEFAULT_BAR = "auto"
-DEFAULT_THEME = "plain"
+DEFAULT_THEME = "slant"
 
 # Tone -> (background, text on it, border) in the 256-colour palette.
 PALETTE: Dict[str, Tuple[int, int, int]] = {

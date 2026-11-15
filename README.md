@@ -3,6 +3,10 @@
 A status line for Claude Code that shows what you need to decide between `/compact`,
 `/clear` and carrying on:
 
+![The status line in the default slant theme, two rows, with the optional agents rows below](docs/images/statusline.png)
+
+The same in the `plain` theme, on one row:
+
 ```
 Haiku 5.5 | [##------------------] 12% (118k/1.0M) | cache 1h: until 16:30:26 | 5h: 17% (reset 17:03) (session ~4.6%) | 7d: 96% (reset 21.10 02:53) (session ~0.5%)
 ```
@@ -39,6 +43,8 @@ sections for fields, [themes](#themes), appearance (level, separator, colours) a
 ```bash
 claude-statusline configure   # or just: claude-statusline
 ```
+
+![The configurator: live preview, fields, themes, progress bars, appearance and the agent panel](docs/images/configure.png)
 
 Typed in a terminal with no input piped in, plain `claude-statusline` opens the editor too (Claude Code
 always pipes its JSON in, so the status line itself is unaffected).
@@ -82,19 +88,19 @@ claude-statusline preview             # print a sample line with the current set
 
 Settings are stored in `~/.claude/claude-statusline.json` (override with the
 `CLAUDE_STATUSLINE_CONFIG` environment variable). Fields: `model`, `effort`, `skill`, `context`, `cache`,
-`5h`, `7d`, `share`, `cacheio` and `agents` (both off by default; turn it on with
+`5h`, `7d`, `share`, `cacheio` and `agents` (all on by default except `agents`; change them with
 `claude-statusline configure` or `--fields`). The agent panel has its own `agent_fields` (`time`,
 `tokens`, `model`, `effort`, `skill`, `cache`, `share`), set in its own section of `configure`; as in the
 main line, `effort` sits next to the model, and on its own only when `model` is off. The order in `fields` is the order on the line.
 
-Rows (`--rows`, the Rows setting of `configure`): `1` (default) puts every field on one row; `2`
+Rows (`--rows`, the Rows setting of `configure`): `1` puts every field on one row; `2` (default)
 splits them, the session (`model`, `effort`, `skill`, `context`, `cache`, `cacheio`) on the first row and the
 plan limits (`5h`, `7d`, `share`) on the second, each row in the configured order and theme.
 
 Detail levels:
 
 - `minimal`: percentages only, no reset times or session share details.
-- `normal`: the default shown at the top of this page.
+- `normal`: the default, shown at the top of this page.
 - `detailed`: adds tokens left in the context, the cache TTL, weekday of the reset, and the
   session's weighted tokens next to its share. The `cacheio` field shows exact token counts.
 
@@ -105,9 +111,9 @@ a sample of each):
 
 | Theme | Look |
 | --- | --- |
-| `plain` (default) | coloured text, fields split by the separator |
+| `plain` | coloured text, fields split by the separator |
 | `blocks` | each field a filled block, gaps between them |
-| `slant` | filled blocks joined by slanted edges ◤ |
+| `slant` (default) | filled blocks joined by slanted edges ◤ |
 | `fade` | filled blocks fading into each other ▓▒░ |
 | `boxes` | coloured frame `╭─╮ │ │ ╰─╯` around each field: three rows |
 
@@ -117,7 +123,7 @@ neighbours of the same colour get a thin `│` between them), cache blue (`1h`),
 standard Unicode characters, so no Nerd Font is needed.
 Context and the `5h` / `7d` limits fill up towards a limit, so each can show a progress bar
 (`--bars`, or the "show a bar on" rows of the Progress bar section of `configure`); by default
-only context has one, and the `minimal` level shows none. All bars share one style (`--bar`, key `b`):
+all three have one, and the `minimal` level shows none. All bars share one style (`--bar`, key `b`):
 
 | Bar | Look |
 | --- | --- |
@@ -148,7 +154,7 @@ running subagent then ends with its share of the 5-hour limit so far, in points 
 limit:
 
 ```
-◯ wykonawca  Compiling main, unit, androidTest sources     6m 13s · ↓ 82.3k tokens · 5h ~20.7%
+◯ worker  Compiling main, unit, androidTest sources     6m 13s · ↓ 82.3k tokens · 5h ~20.7%
 ```
 
 Claude Code replaces the whole row with what the command returns, so the command redraws the
