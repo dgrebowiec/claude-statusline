@@ -64,6 +64,7 @@ PALETTE: Dict[str, Tuple[int, int, int]] = {
     "warn": (178, 16, 220),
     "high": (202, 16, 208),
     "bad": (160, 231, 196),
+    "maroon": (88, 231, 124),
     "tier_1h": (31, 231, 38),
     "tier_5m": (133, 231, 170),
     "expired": (240, 252, 244),

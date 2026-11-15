@@ -5,7 +5,7 @@ formula behind subscription limits, so these ratios are a proxy, not an exact co
 The table and weights match claude-token-report.
 """
 import re
-from typing import List, Mapping, Tuple
+from typing import List, Mapping, Tuple, Optional
 
 W_WRITE_5M = 1.25
 W_WRITE_1H = 2.0
@@ -54,6 +54,15 @@ def price_for(model: str, prompt_tokens: float = 0) -> Tuple[float, float, float
         if pattern in name:
             return price_in, price_out, price_cache_read
     return FALLBACK_PRICE
+
+
+def known_input_price(model: str) -> Optional[float]:
+    """Input price of a model in the table, None for models it does not know."""
+    name = (model or "").lower()
+    for pattern, price_in, _, _ in PRICES:
+        if pattern in name:
+            return price_in
+    return None
 
 
 def weighted(usage: Mapping, model: str) -> float:

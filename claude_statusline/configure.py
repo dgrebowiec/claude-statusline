@@ -70,7 +70,8 @@ def fill_value(on: bool) -> str:
         text = f"■ {lowest}–{upper}%"
         legend.append(f"\033[{STYLES[style]}m{text}{RESET}" if on else f"{DIM}{text}{RESET}")
     if on:
-        return f"{ON}● on{RESET}   " + "  ".join(legend)
+        return (f"{ON}● on{RESET}   " + "  ".join(legend)
+                + f"   {DIM}(model by price, effort by level too){RESET}")
     return (f"{DIM}○ off{RESET}   " + "  ".join(legend)
             + f"   {DIM}(off: every field its own colour){RESET}")
 

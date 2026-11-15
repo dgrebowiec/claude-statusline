@@ -29,10 +29,13 @@ Haiku 5.5 | [##------------------] 12% (118k/1.0M) | cache 1h: until 16:30:26 | 
 
 It uses 0 tokens: it only reads local data and never calls the model.
 
-Colours: model bold cyan, effort bold bright magenta, skill lilac; context and limit percentages by how full
-they are: green below 25%, yellow-green below 50%, yellow below 75%, orange below 90%, red above
-(fill colours, on by default; off: `config --level-colors off` or key `f`, and each of context,
-`5h`, `7d` gets a fixed colour of its own); cache tier blue for `1h`, magenta for `5m`; session share italic cyan; the rest dim.
+Colours: context and limit percentages by how full
+they are: green below 25%, yellow-green below 50%, yellow below 75%, orange below 90%, red above;
+the model and its effort on the same scale, from cheap to dear: model by input price (Haiku green,
+Sonnet yellow, Opus orange, Fable red), effort by level (`low` green, `medium` yellow,
+`high` orange, `xhigh` red, `max` maroon) (fill colours, on by default; off: `config --level-colors off`
+or key `f`: model bold cyan, effort bold bright magenta, and each of context, `5h`, `7d` gets a
+fixed colour of its own); skill lilac; cache tier blue for `1h`, magenta for `5m`; session share italic cyan; the rest dim.
 Set `NO_COLOR=1` to turn colours off.
 
 ## Configure
@@ -59,7 +62,7 @@ always pipes its JSON in, so the status line itself is unaffected).
 | `l` | next detail level |
 | `s` / `S` | next separator preset / type your own |
 | `c` | colours on / off |
-| `f` | fill colours (green / yellow / red by how full) on / off |
+| `f` | fill colours (green / yellow / red by how full, model by price, effort by level) on / off |
 | `a` (or `space` on its on/off row) | [agent panel](#agent-panel) on / off; its fields show only while it is on |
 | `r` | reset to defaults |
 | `enter` | save and exit |
@@ -118,7 +121,7 @@ a sample of each):
 | `boxes` | coloured frame `╭─╮ │ │ ╰─╯` around each field: three rows |
 
 Filled themes colour the block by state: context and limits at the same five fill levels as the
-text (with fill colours off each in its own colour, so neighbouring blocks never merge; two
+text, model and effort in blocks of their own by price and level (with fill colours off each in its own colour, so neighbouring blocks never merge; two
 neighbours of the same colour get a thin `│` between them), cache blue (`1h`), magenta (`5m`) or grey (expired). The shapes are
 standard Unicode characters, so no Nerd Font is needed.
 Context and the `5h` / `7d` limits fill up towards a limit, so each can show a progress bar

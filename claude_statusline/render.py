@@ -11,7 +11,7 @@ from . import themes
 from .cache import cache_status, last_cache_io
 from .config import SECOND_ROW_FIELDS, Config
 from .samples import Samples, write_effort
-from .pricing import display_model
+from .pricing import display_model, known_input_price
 from .agents import Agent, running_agents
 from .transcript import last_skill
 from .usage import load_index, share_numbers
@@ -31,6 +31,7 @@ STYLES = {
     "warn": "33",          # yellow
     "high": "38;5;208",    # orange
     "bad": "31",           # red
+    "maroon": "38;5;88",   # maroon: max effort
     "ok": "32",            # green
     "dim": "2",
     "label": "1",          # bold
@@ -45,6 +46,10 @@ STYLES = {
 
 # Fill levels: (lowest percent, style), from the top down.
 FILL_LEVELS = ((90, "bad"), (75, "high"), (50, "warn"), (25, "fair"), (0, "ok"))
+
+# Model by input price per million tokens, effort by level: the same five colours, cheap to dear.
+MODEL_LEVELS = ((8.0, "bad"), (3.5, "high"), (1.5, "warn"), (0.5, "fair"), (0.0, "ok"))
+EFFORT_LEVELS = {"low": "ok", "medium": "warn", "high": "high", "xhigh": "bad", "max": "maroon"}
 
 BAR_WIDTH = 20
 LIMITS = {"5h": ("five_hour", 5), "7d": ("seven_day", 168)}  # field -> (payload key, hours)
@@ -79,6 +84,23 @@ def usage_tone(config: Config, name: str, pct: float) -> str:
     """Theme tone of a filling field: its level, or with level colours off a colour of its own,
     so neighbouring blocks stay apart."""
     return level(pct) if config.level_colors else f"usage_{name}"
+
+
+def model_style(model_id: Optional[str], graded: bool) -> str:
+    """The colour of a model: by its price with graded colours on, else the fixed model colour."""
+    price = known_input_price(model_id or "") if graded else None
+    if price is None:
+        return "model"
+    return next(style for lowest, style in MODEL_LEVELS if price >= lowest)
+
+
+def effort_style(effort: Optional[str], graded: bool) -> str:
+    return EFFORT_LEVELS.get((effort or "").lower(), "effort") if graded else "effort"
+
+
+def bold(text: str, style: str, enabled: bool) -> str:
+    code = STYLES[style]
+    return paint(text, style, enabled) if code.startswith("1;") or not enabled else f"\033[1;{code}m{text}{RESET}"
 
 
 def fmt_tokens(n: float) -> str:
@@ -150,6 +172,7 @@ class Frame:
     sources: Sources
     transcript: Optional[str]
     on: bool
+    filled: bool = False  # a filled theme: effort gets a block of its own, next to the model
     _cache: Any = field(default=False, repr=False)  # False: not read yet
 
     def cache(self) -> Optional[Tuple[str, float]]:
@@ -159,28 +182,35 @@ class Frame:
         return self._cache
 
 
+def _model_id(f: Frame) -> str:
+    """The model id, or one made from its display name (Opus 5.5 -> opus-5-5) for the price."""
+    model = f.payload.get("model") or {}
+    return model.get("id") or (model.get("display_name") or "").lower().replace(" ", "-").replace(".", "-")
+
+
+def _effort_level(f: Frame) -> Optional[str]:
+    return (f.payload.get("effort") or {}).get("level")
+
+
 def _model(f: Frame) -> str:
     model = f.payload.get("model") or {}
     name = model.get("display_name") or model.get("id") or "?"
-    text = paint(name, "model", f.on)
-    if "effort" in f.config.fields:
-        effort = _effort_text(f)
-        if effort:
-            text += " " + paint(f"({effort})", "effort", f.on)
+    text = bold(name, model_style(_model_id(f), f.config.level_colors), f.on)
+    effort = _effort_level(f)
+    if "effort" in f.config.fields and effort and not f.filled:
+        text += " " + paint(f"(effort: {effort})", effort_style(effort, f.config.level_colors), f.on)
     return text
 
 
-def _effort_text(f: Frame) -> Optional[str]:
-    level_name = (f.payload.get("effort") or {}).get("level")
-    return f"effort: {level_name}" if level_name else None
-
-
 def _effort(f: Frame) -> Optional[str]:
-    """Effort sits next to the model; on its own only when the model field is off."""
-    if "model" in f.config.fields:
+    """Effort sits next to the model; on its own when the model field is off, and in a block of
+    its own on the filled themes, so each has its colour."""
+    if "model" in f.config.fields and not f.filled:
         return None
-    text = _effort_text(f)
-    return paint(text, "effort", f.on) if text else None
+    effort = _effort_level(f)
+    if not effort:
+        return None
+    return paint(f"effort: {effort}", effort_style(effort, f.config.level_colors), f.on)
 
 
 def _skill(f: Frame) -> Optional[str]:
@@ -337,13 +367,14 @@ def cache_short(status: Tuple[str, float], now: float, on: bool) -> str:
     return head + paint(f"until {clock}", f"tier_{tier}", on)
 
 
-def model_text(model_id: Optional[str], effort: Optional[str], on: bool) -> Optional[str]:
+def model_text(model_id: Optional[str], effort: Optional[str], on: bool,
+               graded: bool = True) -> Optional[str]:
     """Model name and, when known, its effort, painted as in the main status line."""
     if not model_id:
         return None
-    text = paint(display_model(model_id), "model", on)
+    text = bold(display_model(model_id), model_style(model_id, graded), on)
     if effort:
-        text += " " + paint(f"(effort: {effort})", "effort", on)
+        text += " " + paint(f"(effort: {effort})", effort_style(effort, graded), on)
     return text
 
 
@@ -377,6 +408,10 @@ def tone(name: str, f: Frame) -> str:
         if status is None:
             return "none"
         return "expired" if status[1] <= f.now else f"tier_{status[0]}"
+    if name == "model":
+        return model_style(_model_id(f), f.config.level_colors)
+    if name == "effort":
+        return effort_style(_effort_level(f), f.config.level_colors)
     return name
 
 
@@ -388,7 +423,7 @@ def build(payload: Dict[str, Any], now: float, config: Config, sources: Sources)
     sources.observe_limits(payload, now)
     # Filled themes draw the text plainly: the segment's background carries its colour.
     filled = on and themes.THEMES.get(config.theme, themes.THEMES["plain"]).filled
-    frame = Frame(payload, now, config, sources, transcript, on and not filled)
+    frame = Frame(payload, now, config, sources, transcript, on and not filled, filled)
     rows: List[List[Tuple[str, str]]] = [[], []]
     for name in config.fields:
         if name == "agents":
@@ -415,9 +450,13 @@ def _agent_row(agent: Agent, f: Frame) -> List[Tuple[str, str]]:
     row = [(paint(f"\u25b8 {agent.name}", "agent", f.on), "agent")]
     if label and f.config.level != "minimal":
         row.append((label, "agent_task"))
-    model = model_text(agent.model_id, agent.effort, f.on)
+    graded = f.config.level_colors
+    model = model_text(agent.model_id, None if f.filled else agent.effort, f.on, graded)
     if model:
-        row.append((model, "model"))
+        row.append((model, model_style(agent.model_id, graded)))
+    if agent.effort and (f.filled or not model):
+        row.append((paint(f"effort: {agent.effort}", effort_style(agent.effort, graded), f.on),
+                    effort_style(agent.effort, graded)))
     if agent.skill:
         row.append(("skill: " + paint(agent.skill, "skill", f.on), "skill"))
     if agent.started:

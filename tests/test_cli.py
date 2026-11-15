@@ -99,6 +99,38 @@ def test_colours_follow_levels_and_no_color(tmp_path, monkeypatch):
     assert "\033[" not in _render(tmp_path, _payload(pct=90))
 
 
+def test_model_and_effort_coloured_from_cheap_to_dear(tmp_path, monkeypatch):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+
+    def line(model_id, effort):
+        return _render(tmp_path, {"model": {"id": model_id, "display_name": "M"},
+                                  "effort": {"level": effort}})
+
+    assert "\033[1;32mM" in line("claude-haiku-5-5", "low")        # cheap: green
+    assert "\033[32m(effort: low)" in line("claude-haiku-5-5", "low")
+    assert "\033[1;38;5;208mM" in line("claude-opus-5-5", "xhigh")  # dear: orange
+    assert "\033[31m(effort: xhigh)" in line("claude-opus-5-5", "xhigh")
+    assert "\033[1;31mM" in line("claude-fable-5-2", "max")         # dearest: red
+    assert "\033[38;5;88m(effort: max)" in line("claude-fable-5-2", "max")
+
+
+def test_model_colour_fixed_without_fill_colours(tmp_path, monkeypatch):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    payload = {"model": {"id": "claude-fable-5-2", "display_name": "M"}, "effort": {"level": "max"}}
+    line = render(payload, now=NOW, projects_dir=tmp_path / "p", cache_dir=tmp_path / "c",
+                  config=Config(level_colors=False))
+    assert "\033[1;36mM" in line and "\033[1;95m(effort: max)" in line
+
+
+def test_filled_theme_gives_effort_a_block_of_its_own(tmp_path, monkeypatch):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    payload = {"model": {"id": "claude-haiku-5-5", "display_name": "M"}, "effort": {"level": "max"}}
+    line = render(payload, now=NOW, projects_dir=tmp_path / "p", cache_dir=tmp_path / "c",
+                  config=Config(theme="slant"))
+    assert "\033[48;5;28;38;5;231m M " in line              # model block: green (cheap)
+    assert "\033[48;5;88;38;5;231m effort: max " in line   # effort block: maroon (max)
+
+
 def test_stdin_garbage_does_not_crash(monkeypatch, capsys):
     monkeypatch.setattr("sys.stdin", __import__("io").StringIO("{broken"))
     cli.main([])

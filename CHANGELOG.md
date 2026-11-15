@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.1
+- Model and effort coloured from cheap to dear on the five fill colours: the model by its input price (Haiku green, Sonnet yellow, Opus orange, Fable red), the effort by level (`low` green, `medium` yellow, `high` orange, `xhigh` red, `max` maroon); in the agent rows too. Fill colours off (`config --level-colors off`, key `f`) keeps the fixed cyan and magenta.
+- Filled themes (`slant`, `blocks`, `fade`) draw the effort in a block of its own next to the model, so each shows its colour.
+
 ## 1.3.0
 - New installs get the `slant` theme, two rows, progress bars on context, `5h` and `7d`, and the `cacheio` field; settings saved by 1.2.0 keep their theme and fields, and take the new rows and bars defaults.
 - README: screenshots of the status line and the configurator.
